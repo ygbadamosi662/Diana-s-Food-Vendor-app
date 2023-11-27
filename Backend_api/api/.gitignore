@@ -1,5 +1,5 @@
 **/node_modules/
 **/package-lock.json
 /v1/models/engine/blacklist.json
-**/.env
-**/mongo_setup
+/v1/.env
+/v1/mongo_setup
