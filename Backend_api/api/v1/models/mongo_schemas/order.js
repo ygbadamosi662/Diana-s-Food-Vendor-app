@@ -1,4 +1,4 @@
-const { Schema } = require('mongoose');
+const { Schema, Embedded } = require('mongoose');
 const { Collections, Order_Status, Order_type, Pre_order_Status } = require('../../enum_ish');
 
 
@@ -52,7 +52,7 @@ const pre_orderSchema = new Schema({
   },
   order_total: {
     type: Number,
-    required: true,
+    default: 0,
   },
   shipping_fee: {
     type: Number,
@@ -60,7 +60,7 @@ const pre_orderSchema = new Schema({
   },
   total: {
     type: Number,
-    required: true,
+    default: 0,
   },
   type: {
     type: String,
@@ -90,7 +90,7 @@ const orderSchema = new Schema({
   },
   order_total: {
     type: Number,
-    required: true,
+    default: 0,
   },
   order_shipping_fee: {
     type: Number,
@@ -98,7 +98,7 @@ const orderSchema = new Schema({
   },
   total: {
     type: Number,
-    required: true,
+    default: 0,
   },
   transaction: {
     type: Schema.Types.ObjectId,

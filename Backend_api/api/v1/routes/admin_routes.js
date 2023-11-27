@@ -18,6 +18,7 @@ adminRoutes.post('/get/notifications', AdminController.get_notifications);
 adminRoutes.get('/get/notification/:id', AdminController.get_notification);
 adminRoutes.post('/food/create', authenticate_super_admin, AdminController.create_food);
 adminRoutes.post('/food/update', authenticate_super_admin, AdminController.update_food);
+adminRoutes.post('/food/schedules/add', authenticate_super_admin, AdminController.add_schedule_to_food);
 adminRoutes.get('/food/delete/:id', authenticate_super_admin, AdminController.delete_food);
 
 

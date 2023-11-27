@@ -90,49 +90,56 @@ class Utility {
     if(!order) {
       return null;
     }
-    if(order) {
-      let { 
-        order_content, 
-        pre_orders,
-        status, 
-        type
-      } = order;
-      if(status === Order_Status.in_cart) {
-        // total cost of not-preordered items
-        if(order_content.length > 0) {
-          order.order_total = order_content.reduce((acc, item) => {
-            return acc + item.food.price * item.qty;
+
+    let { 
+      order_content, 
+      pre_orders,
+      status, 
+      type
+    } = order;
+
+    if(status === Order_Status.in_cart) {
+      // total cost of not-preordered items
+      if(order_content.length > 0) {
+        order.order_total = order_content.reduce((acc, item) => {
+          return acc + (item.food.price * item.qty);
+        }, 0);
+        // if type of not-preordered items is delivery
+        if(type === Order_type.delivery) {
+          order.order_shipping_fee = shipping_service.get_fee();
+        }
+      }
+      // handle pre-orders
+      let no_math_problem_pre_orders = [];
+      if(pre_orders.length > 0) {
+        no_math_problem_pre_orders = pre_orders.map((pre_order) => {
+          console.log(pre_order)
+          pre_order.order_total = pre_order.order_content.reduce((acc, item) => {
+            return acc + (item.food.price * item.qty);
           }, 0);
 
-          // if type of not-preordered items is delivery
-          if(type === Order_type.delivery) {
-            order.order_shipping_fee = shipping_service.get_fee();
+          if(pre_order.type === Order_type.delivery) {
+            pre_order.shipping_fee = shipping_service.get_fee();
           }
-        }
-
-        // handle pre-orders
-        if(pre_orders.length > 0) {
-          order.pre_orders = pre_orders.map((pre_order) => {
-            pre_order.order_total = pre_order.order_content.reduce((acc, item) => {
-              return acc + (item.food.price * item.qty);
-            }, 0);
-  
-            if(pre_order.type === Order_type.delivery) {
-              pre_order.shipping_fee = shipping_service.get_fee();
-            }
-            
-            pre_order.total = pre_order.order_total + pre_order.shipping_fee;
-            return pre_order;
-          });
-        }
-
-        // order total
-        order.total = order.order_total + order.order_shipping_fee + order.pre_orders?.reduce((acc, pre_order) => {
-          return acc + pre_order.total;
-        }, 0);
+          pre_order.total = pre_order.order_total + pre_order.shipping_fee;
+          return pre_order;
+        });
       }
-      return order;
+
+      let total_pre_orders = no_math_problem_pre_orders.reduce((acc, pre_order) => {
+        return acc + pre_order.total;
+      }, 0);
+
+      order.total = order.order_total + order.order_shipping_fee + total_pre_orders;
+
+      if(pre_orders.length > 1) {
+        order.pre_orders = no_math_problem_pre_orders;
+      }
+      if(pre_orders.length === 1) {
+        order.pre_order = [no_math_problem_pre_orders[0]];
+      }
     }
+    return order;
   }
 }
 

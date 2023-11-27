@@ -11,8 +11,18 @@ const { Connection } = require('../models/engine/db_storage');
 const MongooseError = require('mongoose').Error;
 const JsonWebTokenErro = require('jsonwebtoken').JsonWebTokenError;
 const Joi = require('joi');
+const { get_schedule_expiry } = require('../models/mongo_schemas/food');
 // const { redisClient } = require('../redis');
-const { Type, Status, Role, Collections } = require('../enum_ish');
+const { 
+  Type, 
+  Status, 
+  Role, 
+  Collections, 
+  Order_Status, 
+  Transaction_Status, 
+  Schedule_type, 
+  Schedule_expiry_prefix
+ } = require('../enum_ish');
 /**
  * Contains the UserController class 
  * which defines route handlers.
@@ -218,6 +228,155 @@ class AdminController {
         .status(201)
         .json({
           msg: `Food successfully updated`,
+        });
+    } catch (error) {
+      
+      if (error instanceof MongooseError) {
+        console.log('We have a mongoose problem', error.message);
+        return res.status(500).json({msg: error.message});
+      }
+      if (error instanceof JsonWebTokenErro) {
+        console.log('We have a jwt problem', error.message);
+        return res.status(500).json({msg: error.message});
+      }
+      console.log(error);
+      return res.status(500).json({msg: error.message});
+    }
+  }
+
+  static async add_schedule_to_food(req, res) {
+    try {
+      const schema = Joi.object({
+        id: Joi
+          .string()
+          .required(),
+        schedules: Joi
+          .array()
+          .items(Joi.string())
+          .required(),
+        type: Joi
+          .string()
+          .valid(...Object.values(Schedule_type))
+          .default(Schedule_type.one_off),
+      });
+
+      // validate body
+      const { value, error } = schema.validate(req.body);
+      
+      if (error) {
+        throw error;
+      }
+
+      /**
+       * Validates the ISO format and timing of each schedule in the given value.
+       *
+       * @return {boolean} Returns true if all schedules are in ISO format and have a timing in the future, otherwise false.
+       */
+      const validate_iso_and_timing = () => {
+        const isoStringRegex = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+        return value.schedules.every((schedule) => isoStringRegex.test(schedule)) && value.schedules.every((schedule) => {
+          const date = new Date(schedule);
+          return date.getTime() > Date.now();
+        });
+      };
+
+      // validate schedules
+      if(!validate_iso_and_timing()) {
+        return res
+          .status(400)
+          .json({
+            msg: 'Invalid request, schedules must be in ISO format and must be in the future',
+          });
+      }
+
+      const food = await Food
+        .findById(value.id)
+        .exec();
+    
+      // validate food
+      if(!food) {
+        return res
+          .status(400)
+          .json({
+            msg: `Invalid request, There is no food with id: ${value.id}`,
+          });
+      }
+
+      let scheduled_flag = false;
+
+      // check if only one schedule is provided
+      if((scheduled_flag === false) && value.schedules.length === 1) {
+        const s_time = new Date(value.schedules[0]);
+        // create new schedule
+        let new_schedule = {
+          for: s_time,
+          type: value.type,
+        };
+        new_schedule.expiry_time = new Date(get_schedule_expiry(new_schedule));
+        // check if food already has this schedule
+        if((food.schedules.length > 0) && (!food.schedules.every((schedule) => schedule.for !== new_schedule.for))) {
+          return res
+            .status(400)
+            .json({
+              msg: `Oops, food already has schedule: ${value.schedules[0]}`,
+            });
+        }
+        // add schedule
+        food.schedules.push(new_schedule);
+        scheduled_flag = true;
+      }
+
+      // check if more than one schedule is provided
+      if((scheduled_flag === false) && value.schedules.length > 1) {
+         // check if food has schedules
+        if((scheduled_flag === false) && food.schedules.length === 0) {
+          let new_schedules = value.schedules.map(schedule => {
+            const new_schedule = {
+              for: new Date(schedule),
+              type: value.type,
+              expiry_time: new Date(get_schedule_expiry({for: new Date(schedule), type: value.type})),
+            };
+            return new_schedule;
+          });
+
+          food.schedules = new_schedules;
+          scheduled_flag = true;
+        }
+
+        if((scheduled_flag === false) && food.schedules.length > 0) {
+          let new_schedules = value.schedules.map(schedule => {
+            const new_schedule = {
+              for: new Date(schedule),
+              type: value.type,
+              expiry_time: new Date(get_schedule_expiry({for: new Date(schedule), type: value.type})),
+            };
+
+            if(!food.schedules.every((schedule) => schedule.for !== new_schedule.for)) {
+              return res
+                .status(400)
+                .json({
+                  msg: `Oops, food already has schedule: ${schedule}`,
+                });
+            }
+
+            return new_schedule;
+          });
+
+          food.schedules = [...food.schedules, ...new_schedules];
+          scheduled_flag = true;
+        }
+      }
+
+      // sort schedules in ascending order
+      scheduled_flag && food.schedules.sort((a, b) => a.for - b.for);
+
+      // save food
+      scheduled_flag && await food.save();
+      
+      return res
+        .status(201)
+        .json({
+          msg: `schedules successfully added`,
         });
     } catch (error) {
       

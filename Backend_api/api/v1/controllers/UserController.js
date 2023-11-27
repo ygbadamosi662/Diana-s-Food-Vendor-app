@@ -241,8 +241,7 @@ class UserController {
               .items(Joi.number().integer()),
             type: Joi
               .string()
-              .valid(...Object.values(Type))
-              .default(Type.food),
+              .valid(...Object.values(Type)),
             price_range: Joi
               .array()
               .items(Joi.number().integer().precision(2)),
@@ -649,13 +648,23 @@ class UserController {
 
       // check if food exists
       const food = await Food
-                    .findById(value.food_id)
-                    .exec();
+        .findById(value.food_id)
+        .exec();
+
       if(!food) {
         return res
           .status(400)
           .json({
             msg: 'Invalid Request, food does not exist',
+          });
+      }
+      
+      // validate schedule
+      if(!food.schedules[value.pre_order.schedule]) {
+        return res
+          .status(400)
+          .json({
+            msg: 'Invalid Request, schedule does not exist',
           });
       }
 
@@ -666,11 +675,13 @@ class UserController {
           user: user,
           status: Order_Status.in_cart,
         });
-      
+
+      let added_flag = false;
+
       // if no existing cart
-      if(!order) {
+      if((added_flag === false) && (order.length === 0)) {
         // if pre-order
-        if(value.pre_order.yes) {
+        if((added_flag === false) && (value.pre_order.yes)) {
           const now = new Date();
           // check if pre-order time has expired
           if(now > food.schedules[value.pre_order.schedule]?.expiry_time) {
@@ -689,7 +700,7 @@ class UserController {
                 ready_time: food.schedules[value.pre_order.schedule]?.for,
               },
             }],
-            delivery_time: value.pre_order.delivery_time ? value.pre_order.delivery_time : food.schedules[value.pre_order.schedule]?.for,
+            delivery_time: value.pre_order.delivery_time ? new Date(value.pre_order.delivery_time) : food.schedules[value.pre_order.schedule]?.for,
           };
           // create order
           order = await Order.create({
@@ -697,10 +708,22 @@ class UserController {
             status: Order_Status.in_cart,
             pre_orders: [pre_order],
           });
+
+          // update food schedule
+          let pre_order_id = order.pre_orders[0]._id.toString();
+          let ssf = food.schedules[value.pre_order.schedule].orders;
+          ssf.push({
+            order: order,
+            user: user,
+            pre_order_id: pre_order_id,
+            qty: value.qty,
+          })
+          food.schedules[value.pre_order.schedule].orders = ssf;
+          added_flag = true;
         }
 
         // not pre-order
-        if(!value.pre_order.yes) {
+        if((added_flag === false) && (!value.pre_order.yes)) {
           order = await Order.create({
             user: user,
             status: Order_Status.in_cart,
@@ -710,9 +733,11 @@ class UserController {
             }],
           });
         }
-      } else {
+      } 
+      // if existing cart
+      if((added_flag === false) && (order.length > 0)) {
         // if pre-order
-        if(value.pre_order.yes) {
+        if((added_flag === false) && (value.pre_order.yes)) {
           const now = new Date();
           // check if pre-order time has expired
           if(now > food.schedules[value.pre_order.schedule]?.expiry_time) {
@@ -725,9 +750,9 @@ class UserController {
     
           // find pre-order
           let found = false;
-          order.pre_orders = order.pre_orders.map((pre_order) => {
+          order[0].pre_orders = order[0].pre_orders?.map((pre_order) => {
             // delivery time or ready time matches any existing pre-order
-            if((pre_order.delivery_time === value.pre_order.delivery_time) || (food.schedules[value.pre_order.schedule]?.for === pre_order.delivery_time)) {
+            if((pre_order.delivery_time.toISOString() === value.pre_order.delivery_time.toISOString()) || (food.schedules[value.pre_order.schedule]?.for === pre_order.delivery_time)) {
               // update pre-order
               pre_order.order_content.push({
                 food: food,
@@ -736,6 +761,15 @@ class UserController {
                   ready_time: food.schedules[value.pre_order.schedule]?.for,
                 },
               });
+              // found pre-order
+              // update food schedule
+              food.schedules[value.pre_order.schedule].orders.push({
+                order: order[0],
+                user: user,
+                pre_order_id: pre_order._id.toString(),
+                qty: value.qty,
+              });
+              // found
               found = true;
               return pre_order;
             }
@@ -744,7 +778,7 @@ class UserController {
 
           if(!found) {
             // create pre-order
-            order.pre_orders.push({
+            order[0].pre_orders.push({
               order_content: [{
                 food: food,
                 qty: value.qty,
@@ -754,29 +788,22 @@ class UserController {
               }],
               delivery_time: value.pre_order.delivery_time ? value.pre_order.delivery_time : food.schedules[value.pre_order.schedule]?.for,
             });
-          }
-          const pre_order = {
-            order_content: [{
-              food: food,
+
+            // update food schedule
+            food.schedules[value.pre_order.schedule].orders.push({
+              order: order[0],
+              user: user,
+              pre_order_id: order[0].pre_orders[ order[0].pre_orders.length - 1 ]._id.toString(),
               qty: value.qty,
-              scheduled_for: {
-                ready_time: food.schedules[value.pre_order.schedule]?.for,
-                delivery_time: value.pre_order.delivery_time ? value.pre_order.delivery_time : food.schedules[value.pre_order.schedule]?.for,
-              },
-            }],
-            delivery_time: value.pre_order.delivery_time ? value.pre_order.delivery_time : food.schedules[value.pre_order.schedule]?.for,
-          };
-          // create order
-          order = await Order.create({
-            user: user,
-            status: Order_Status.in_cart,
-            pre_orders: [pre_order],
-          });
+            });
+          }
+
+          order = order[0];
         }
 
         // not pre-order
-        if(!value.pre_order.yes) {
-          order.order_content.push({
+        if((added_flag === false) && (!value.pre_order.yes)) {
+          order[0].order_content.push({
             food: food,
             qty: value.qty,
           });
@@ -786,14 +813,19 @@ class UserController {
       // do the maths
       order = util.solve_order_math_problem(order);
 
-      // save order
-      await order.save();
+      await Connection
+        .transaction(async () => {
+          const gather_task = Promise.all([food.save(), order.save()])
+          // save
+          await gather_task;
+          
+        });
 
       return res
         .status(201)
         .json({
           msg: `item added to cart successfully`,
-          order: order
+          order: order._id
         });
     } catch (error) {
       

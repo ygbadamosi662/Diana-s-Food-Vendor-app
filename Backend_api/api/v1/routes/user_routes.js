@@ -20,6 +20,7 @@ userRoutes.get('/review/delete/:id', UserController.delete_review);
 userRoutes.post('/notification/notifications', UserController.get_notifications);
 userRoutes.post('/notification/read-notifications', UserController.read_notifications);
 userRoutes.get('/notification/:id', UserController.get_notification);
+userRoutes.post('/food/cart/add', UserController.add_to_cart);
 userRoutes.get('/pwt/test', UserController.test_pwt);
 
 

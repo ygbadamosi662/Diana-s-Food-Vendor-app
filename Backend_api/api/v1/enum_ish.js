@@ -95,7 +95,13 @@ const Shipemnt_status = {
   pending: 'PENDING',
   in_transit: 'IN TRANSIT',
   delivered: 'DELIVERED',
-}
+};
+
+const Schedule_expiry_prefix = {
+  hour: 60 * 60 * 1000,
+  day: 24 * 60 * 60 * 1000,
+  minute: 60 * 60 * 1000,
+};
 
 module.exports = { 
   Order_type, 
@@ -111,5 +117,6 @@ module.exports = {
   Schedule_type,
   Pre_order_Status,
   Where,
-  Shipemnt_status
+  Shipemnt_status,
+  Schedule_expiry_prefix,
 };
