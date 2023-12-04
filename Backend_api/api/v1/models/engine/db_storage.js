@@ -21,6 +21,7 @@ const db_port = process.env.DB_PORT;
 class DbStorage {
   constructor() {
     try {
+      this._page_size = 20;
       // initializes a new DbStorage instance
       this._conn = mongoose
         .createConnection(`mongodb://${db_user}:${db_pwd}@${db_host}:${db_port}/${db_name}`, {minPoolSize: 2});
@@ -40,6 +41,10 @@ class DbStorage {
 
   get mongo_db() {
     return this._mongo_db;
+  }
+
+  get page_size() {
+    return this._page_size;
   }
 
   set mongo_db(value) {
@@ -177,6 +182,51 @@ class DbStorage {
 }
 
 const db_storage = new DbStorage();
-db_storage.reload();
+db_storage.reload(); //load Collections
 
-module.exports = { storage: db_storage, Connection: db_storage.conn };
+/**
+ * Returns information about pagination for a given filter and collection.
+ * @param {object} filter - The filter to apply to the collection.
+ * @param {string|null} collection - The name of the collection to query. If null, the default collection is used.
+ * @param {number} page_size - The number of items per page.
+ * @param {number} page - The current page number.
+ * @returns {object} - An object containing pagination information, haveNextPage, currentPageExists, totalPages.
+ * @throws {Error} - If there is an error while retrieving the pagination information.
+ */
+const page_info = async (filter, collection=null, page_size=10, page=1) => {
+  try {
+    
+    const totalCount = await db_storage.get_a_repo(collection)
+      .countDocuments(filter)
+      .exec();
+
+    let totalPages = Math.floor(totalCount / page_size);
+    if((totalCount % page_size) > 0) {
+      totalPages = totalPages + 1;
+    }
+    
+    return {
+      haveNextPage: page < totalPages,
+      currentPageExists: page <= totalPages,
+      totalPages: totalPages
+    };
+  } catch (error) {
+    throw error;
+  }
+}
+
+const { Food, Order, Transaction, User, Review, Shipment, Address, Notification } = db_storage.mongo_repos;
+
+module.exports = { 
+  storage: db_storage, 
+  Connection: db_storage.conn, 
+  Food, 
+  Order, 
+  Transaction, 
+  User, 
+  Review, 
+  Shipment, 
+  Address, 
+  Notification,
+  page_info,
+};

@@ -18,7 +18,20 @@ const Type = {
   snacks: 'SNACKS',
   rice: 'RICE',
   food: 'FOOD',
+  dessert: 'DESSERT',
+  salad: 'SALAD',
+  breakfast: 'BREAKFAST',
+  lunch: 'LUNCH',
+  dinner: 'DINNER',
 };
+
+const food_measurement = {
+  plate: 'PLATE',
+  serving: 'SERVING',
+  cup: 'CUP',
+  pack: 'PACK',
+  piece: 'PIECE',
+}
 
 const Note_Status = {
   sent: 'SENT',
@@ -28,10 +41,11 @@ const Note_Status = {
 };
 
 const Order_Status = {
-  otw: 'OTW',
   ready: 'READY',
   completed: 'COMPLETED',
   cancelled: 'CANCELLED',
+  Disputed: 'DISPUTED',
+  Resolved: 'RESOLVED',
   pending_transaction: 'PENDING TRANSACTION',
   in_cart: 'IN CART',
 };
@@ -39,9 +53,11 @@ const Order_Status = {
 const Pre_order_Status = {
   created: 'CREATED',
   cancelled: 'CANCELLED',
+  disputed: 'DISPUTED',
+  resolved: 'RESOLVED',
   checked_out: 'CHECKED OUT',
-  otw: 'OTW',
-  completed: 'COMPLETED',
+  picked_up: 'PICKED UP',
+  delivered: 'DELIVERED',
 };
 
 const Transaction_Status = {
@@ -97,10 +113,31 @@ const Shipemnt_status = {
   delivered: 'DELIVERED',
 };
 
-const Schedule_expiry_prefix = {
+const Time_share = {
   hour: 60 * 60 * 1000,
   day: 24 * 60 * 60 * 1000,
   minute: 60 * 60 * 1000,
+  week: 7 * 24 * 60 * 60 * 1000,
+  month: 30 * 24 * 60 * 60 * 1000,
+  year: 365 * 24 * 60 * 60 * 1000,
+}
+
+const States = {
+  lagos: 'Lagos',
+  abuja: 'Abuja',
+  oyo: 'Oyo',
+  ondo: 'Ondo',
+};
+
+const Countries = {
+  nigeria: 'Nigeria',
+};
+
+const Events = {
+  add: 'ADD',
+  remove: 'REMOVE',
+  overwrite: 'OVERWRITE',
+  clear: 'CLEAR',
 };
 
 module.exports = { 
@@ -118,5 +155,8 @@ module.exports = {
   Pre_order_Status,
   Where,
   Shipemnt_status,
-  Schedule_expiry_prefix,
+  States,
+  Countries,
+  Time_share,
+  Events,
 };

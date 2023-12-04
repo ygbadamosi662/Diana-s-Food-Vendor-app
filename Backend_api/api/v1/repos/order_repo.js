@@ -24,17 +24,6 @@ class OrderRepo {
     return this._page_size;
   }
 
-  async get_orders (filter, page=1, size=this._page_size) {
-    const revs =  await this._repo
-      .find(filter)
-      .populate('user', 'name _id')
-      .skip((page - 1) * size)
-      .limit(size)
-      .sort({ stars: 1 })
-      .exec();
-    return revs;
-  }
-
   async has_next_page(filter, page=1, page_size=this._page_size) {
     try {
       const totalCount = await this._repo

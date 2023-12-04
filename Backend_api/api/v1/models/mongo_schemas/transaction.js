@@ -22,6 +22,15 @@ const transactionSchema = new Schema({
     ref: Collections.User,
     required: true,
   },
+  order: {
+    type: Schema.Types.ObjectId,
+    ref: Collections.Order,
+    required: true,
+  },
+  pre_order_id: {
+    type: String,
+    default: null,
+  },
   amount: {
     type: Number,
     required: true,

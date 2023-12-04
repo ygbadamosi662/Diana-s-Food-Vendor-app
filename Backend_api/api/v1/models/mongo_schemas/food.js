@@ -1,5 +1,5 @@
-const { Schema } = require('mongoose');
-const { Type, Schedule_type, Schedule_expiry_prefix, Collections } = require('../../enum_ish');
+const { Schema, Types } = require('mongoose');
+const { Type, Schedule_type, Time_share, Collections } = require('../../enum_ish');
 
 
 const sheduleOrderSchema = new Schema({
@@ -24,7 +24,7 @@ const sheduleOrderSchema = new Schema({
 }, { timestamps: true });
 
 const scheduleSchema = new Schema({
-  for: {
+  for_when: {
     type: Date,
     required: true,
   },
@@ -44,6 +44,10 @@ const scheduleSchema = new Schema({
     type: String,
     enum: Object.values(Schedule_type),
     default: Schedule_type.one_off,
+  },
+  hashtag: {
+    type: String,
+    default: null,
   }
 }, { timestamps: true });
 
@@ -57,10 +61,10 @@ const foodSchema = new Schema({
     type: Number,
     default: 0,
   },
-  type: {
-    type: String,
+  types: {
+    type: [String],
     enum: Object.values(Type),
-    default: Type.food,
+    default: [Type.food],
   },
   price: {
     type: Number,
@@ -76,30 +80,49 @@ const foodSchema = new Schema({
   }
 }, { timestamps: true });
 
+foodSchema.pre('save', function(next) {
+  // to check valid types in the doc
+  if(this.types) {
+    const invalid_type = this.types.find((type) => {
+      return Object.values(Type).includes(type) === false;
+    })
+    if(invalid_type) {
+      return next(new Error(`Invalid food type: ${invalid_type}`));
+    }
+  }
+  
+  next();
+});
+
 /**
  * Calculates the expiry time for a given schedule.
  *
  * @param {object} schedule - The schedule object.
  * @param {string|null} prefix - The prefix value.
  * @param {string} expiry_prefix - The expiry prefix value. Defaults to "1 hour".
- * @return {number} The expiry time in milliseconds.
+ * @return {Date || null} The expiry time or null.
  */
-const get_schedule_expiry = (schedule, prefix=null, expiry_prefix=Schedule_expiry_prefix.hour) => {
-  // if daily
-  if(schedule.type === Schedule_type.daily) {
-    return schedule.for.getTime() - (4 * Schedule_expiry_prefix.hour);
-  }
-  // one off
-  if(schedule.type === Schedule_type.one_off) {
-    if(prefix) {
-      return schedule.for.getTime() - (prefix * Schedule_expiry_prefix[expiry_prefix]);
+const get_schedule_expiry = (schedule, time_share=Time_share.hour, times=1) => {
+  try {
+    if((!schedule.type) || (!schedule.for_when)) {
+      return null;
     }
-    return schedule.for.getTime() - (Schedule_expiry_prefix.hour);
-  }
-  // if weekly
-  if((schedule.type === Schedule_type.weekly) || (schedule.type === Schedule_type.monthly)) {
-    return schedule.for.getTime() - (Schedule_expiry_prefix.day);
+    // if daily
+    if(schedule.type === Schedule_type.daily) {
+      return new Date(schedule.for_when.getTime() - (4 * Time_share.hour));
+    }
+    // one off
+    if(schedule.type === Schedule_type.one_off) {
+      return new Date(schedule.for_when.getTime() - (times * Time_share[time_share]));
+    }
+    // if weekly
+    if((schedule.type === Schedule_type.weekly) || (schedule.type === Schedule_type.monthly)) {
+      return new Date(schedule.for_when.getTime() - (Time_share.day));
+    }
+    return null;
+  } catch (error) {
+    throw error;
   }
 }
 
-module.exports = { foodSchema, scheduleSchema, get_schedule_expiry, sheduleOrderSchema };
+module.exports = { foodSchema, scheduleSchema, get_schedule_expiry, sheduleOrderSchema, Types };

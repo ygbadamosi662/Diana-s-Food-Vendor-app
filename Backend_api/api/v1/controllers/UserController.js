@@ -1,17 +1,27 @@
 const util = require('../util');
+const { shipping_service } = require('../services/shipping_service');
 const { appAx } = require('../appAxios');
-const { user_repo, User } = require('../repos/user_repo');
-const { Food, food_repo } = require('../repos/food_repo');
-const { Review, review_repo } = require('../repos/review_repo');
-const { Order, order_repo } = require('../repos/order_repo');
-const { Transaction, transaction_repo } = require('../repos/transaction_repo');
+const { user_repo } = require('../repos/user_repo');
+const { review_repo } = require('../repos/review_repo');
+const { Shipment, Address, Transaction, User, Food, Review, Order, Notification, page_info } = require('../models/engine/db_storage')
 const { notification_service } = require('../services/notification_service');
-const { Notification, notification_repo } = require('../repos/notification_repo');
+const { notification_repo } = require('../repos/notification_repo');
 const { Connection } = require('../models/engine/db_storage');
 const MongooseError = require('mongoose').Error;
 const JsonWebTokenErro = require('jsonwebtoken').JsonWebTokenError;
 const Joi = require('joi');
-const { Collections, Order_Status, Transaction_Status, Role, Type, Order_type } = require('../enum_ish');
+const { Types } = require('../models/mongo_schemas/food');
+const { Collections, 
+  Order_Status, 
+  Transaction_Status, 
+  Role, 
+  Type, 
+  Order_type, 
+  Where, 
+  States,
+  Countries,
+  Time_share
+ } = require('../enum_ish');
 /**
  * Contains the UserController class 
  * which defines route handlers.
@@ -114,12 +124,9 @@ class UserController {
       let now = new Date();
       now.setMinutes(now.getMinutes() + 5);
       
-      const paystack_res = await appAx.post('https://api.paystack.co/charge', {
+      const paystack_res = await appAx.post('https://api.paystack.co/transaction/initialize', {
         email: "vendor@gmail.com",
         amount:  100000,
-        bank_transfer: {
-          account_expires_at: now.toISOString(),
-        }
       });
       console.log(paystack_res)
       return res
@@ -225,7 +232,7 @@ class UserController {
       return res.status(500).json({msg: error.message});
     }
   }
-
+// needs update
   static async get_foods(req, res) {
     try {
       const schema = Joi.object({
@@ -235,19 +242,22 @@ class UserController {
         filter: Joi
           .object({
             name: Joi
-              .string(), 
+              .string(),
             fave_count: Joi
               .array()
               .items(Joi.number().integer()),
-            type: Joi
-              .string()
-              .valid(...Object.values(Type)),
+            types: Joi
+              .array()
+              .items(Joi.string().valid(...Object.values(Type))),
+            schedule: Joi
+              .date()
+              .iso(),
             price_range: Joi
               .array()
               .items(Joi.number().integer().precision(2)),
             qty_range: Joi
               .array()
-              .items(Joi.number().integer().precision(2)),
+              .items(Joi.number().integer()),
           }),
         page: Joi
           .number()
@@ -266,38 +276,44 @@ class UserController {
         throw error;
       }
 
-      let filter = {};
+      const { filter, page, size } = value;
+
+      let query = {};
       // if filter is set
-      if(value.filter) {
+      if(filter) {
         // building filter
-        filter = value.filter;
-        const { name, fave_count, type, price_range, qty_range } = filter;
+        const { name, fave_count, types, price_range, qty_range, schedule } = filter;
+
+        if(schedule) {
+          query.schedules = { $elemMatch: { for_when: schedule } };
+        }
         
         if(name) {
-          filter.name = new RegExp(name);
+          query.name = new RegExp(name);
         }
 
         if(price_range) {
-          filter.price_range = util.sort_array_filter(price_range, res);
+          query.price = util.sort_array_filter(price_range, res);
         }
 
         if(qty_range) {
-          filter.qty_range = util.sort_array_filter(qty_range, res);
+          query.qty = util.sort_array_filter(qty_range, res);
         }
 
         if(fave_count) {
-          filter.fave_count = util.sort_array_filter(fave_count, res);
+          query.fave_count = util.sort_array_filter(fave_count, res);
         }
 
-        if(type) {
-          filter.type = type;
+        if(types) {
+          query.types = { $in: types };
         }
       }
 
+      console.log(query);
       // if count is true, consumer just wants a count of the filtered documents
       if (value.count) {
-        const count = await Recipe
-          .countDocuments(filter);
+        const count = await Food
+          .countDocuments(query);
 
         return res
           .status(200)
@@ -305,25 +321,40 @@ class UserController {
             count: count,
           });
       }
-      
-      const gather_data_task = Promise.all([
-        Food
-        .find(filter)
-        .skip((value.page - 1) * value.size)
-        .limit(value.size)
-        .sort({ createdAt: -1 })
-        .exec(), //get foods
-        food_repo.has_next_page(filter, value.page, value.size), //if there is a next page
-        food_repo.total_pages(filter, value.size), //get total pages
-      ]);
 
-      const done = await gather_data_task;
+      const { haveNextPage, currentPageExists, totalPages } = await page_info(query, Collections.Food, size, page);
+
+      let gather_data = [];
+
+      if(currentPageExists) {
+        const foods = await Food
+          .find(query)
+          .skip((page - 1) * size)
+          .limit(size)
+          .sort({ createdAt: -1 })
+          .exec(); //get orders
+
+        gather_data = [
+          foods,
+          haveNextPage, //have next page
+          totalPages, //total pages
+        ];
+      }
+
+      if(!currentPageExists) {
+        gather_data = [
+          [],
+          haveNextPage, //have next page
+          totalPages, //total pages
+        ];
+      }
+      
       return res
         .status(200)
         .json({
-          foods: done[0],
-          have_next_page: done[1],
-          total_pages: done[2],
+          foods: gather_data[0],
+          have_next_page: gather_data[1],
+          total_pages: gather_data[2],
         });
         
     } catch (error) {
@@ -646,16 +677,39 @@ class UserController {
         throw error;
       }
 
+      const validate_timing = () => {
+        return value.pre_order.delivery_time.getTime() > Date.now();
+      };
+
+      // validate schedules
+      if(value.pre_order.yes && !validate_timing()) {
+        return res
+          .status(400)
+          .json({
+            msg: 'Invalid request, delivery must have a reasonable timing in the future',
+          });
+      }
+
       // check if food exists
       const food = await Food
         .findById(value.food_id)
         .exec();
 
+      // validate food
       if(!food) {
         return res
           .status(400)
           .json({
             msg: 'Invalid Request, food does not exist',
+          });
+      }
+
+      // validate qty
+      if(!util.can_food_fullfill_order(food, value.qty)) {
+        return res
+          .status(400)
+          .json({
+            msg: `Invalid Request, not enough ${food.name} in stock`,
           });
       }
       
@@ -670,21 +724,26 @@ class UserController {
 
       const user = await user_repo.findByEmail(req.user.email);
 
+      // find open cart
       let order = await Order
         .find({
           user: user,
           status: Order_Status.in_cart,
-        });
+        })
+        .populate('pre_orders.order_content.food order_content.food');
+      // console.log(order.pre_orders[0]);
 
       let added_flag = false;
+      const cost = food.price * value.qty;
 
       // if no existing cart
       if((added_flag === false) && (order.length === 0)) {
+        const shipping_fee = shipping_service.get_fee(true);
         // if pre-order
         if((added_flag === false) && (value.pre_order.yes)) {
           const now = new Date();
           // check if pre-order time has expired
-          if(now > food.schedules[value.pre_order.schedule]?.expiry_time) {
+          if(now.getTime() > food.schedules[value.pre_order.schedule]?.expiry_time.getTime()) {
             return res
               .status(400)
               .json({
@@ -697,16 +756,23 @@ class UserController {
               food: food,
               qty: value.qty,
               scheduled_for: {
-                ready_time: food.schedules[value.pre_order.schedule]?.for,
+                ready_time: food.schedules[value.pre_order.schedule]?.for_when,
               },
             }],
-            delivery_time: value.pre_order.delivery_time ? new Date(value.pre_order.delivery_time) : food.schedules[value.pre_order.schedule]?.for,
+            ready_time: value.pre_order.delivery_time ? value.pre_order.delivery_time : food.schedules[value.pre_order.schedule]?.for_when,
+            total_qty: value.qty,
+            order_total: cost,
+            shipping_fee: shipping_fee,
+            total: cost + shipping_fee
           };
+
           // create order
           order = await Order.create({
             user: user,
             status: Order_Status.in_cart,
             pre_orders: [pre_order],
+            total_qty: value.qty,
+            total: cost + shipping_fee
           });
 
           // update food schedule
@@ -731,6 +797,10 @@ class UserController {
               food: food,
               qty: value.qty,
             }],
+            total_qty: value.qty,
+            order_total: cost,
+            shipping_fee: shipping_fee,
+            total: cost + shipping_fee
           });
         }
       } 
@@ -740,7 +810,7 @@ class UserController {
         if((added_flag === false) && (value.pre_order.yes)) {
           const now = new Date();
           // check if pre-order time has expired
-          if(now > food.schedules[value.pre_order.schedule]?.expiry_time) {
+          if(now.getTime() > food.schedules[value.pre_order.schedule]?.expiry_time.getTime()) {
             return res
               .status(400)
               .json({
@@ -752,15 +822,20 @@ class UserController {
           let found = false;
           order[0].pre_orders = order[0].pre_orders?.map((pre_order) => {
             // delivery time or ready time matches any existing pre-order
-            if((pre_order.delivery_time.toISOString() === value.pre_order.delivery_time.toISOString()) || (food.schedules[value.pre_order.schedule]?.for === pre_order.delivery_time)) {
+            if((pre_order.ready_time.getTime() === value.pre_order.delivery_time.getTime()) || (food.schedules[value.pre_order.schedule]?.for_when.getTime() === pre_order.ready_time.getTime())) {
               // update pre-order
               pre_order.order_content.push({
                 food: food,
                 qty: value.qty,
                 scheduled_for: {
-                  ready_time: food.schedules[value.pre_order.schedule]?.for,
+                  ready_time: food.schedules[value.pre_order.schedule]?.for_when,
                 },
               });
+
+              pre_order.total_qty += value.qty;
+              pre_order.order_total += cost;
+              pre_order.shipping_fee = shipping_service.get_fee(true);
+              pre_order.total = pre_order.order_total + pre_order.shipping_fee;
               // found pre-order
               // update food schedule
               food.schedules[value.pre_order.schedule].orders.push({
@@ -777,16 +852,21 @@ class UserController {
           })
 
           if(!found) {
+            const shipping_fee = shipping_service.get_fee(true);
             // create pre-order
             order[0].pre_orders.push({
               order_content: [{
                 food: food,
                 qty: value.qty,
                 scheduled_for: {
-                  ready_time: food.schedules[value.pre_order.schedule]?.for,
+                  ready_time: food.schedules[value.pre_order.schedule]?.for_when,
                 },
               }],
-              delivery_time: value.pre_order.delivery_time ? value.pre_order.delivery_time : food.schedules[value.pre_order.schedule]?.for,
+              ready_time: value.pre_order.delivery_time ? value.pre_order.delivery_time : food.schedules[value.pre_order.schedule]?.for_when,
+              total_qty: value.qty,
+              order_total: cost,
+              shipping_fee: shipping_fee,
+              total: cost + shipping_fee
             });
 
             // update food schedule
@@ -797,8 +877,8 @@ class UserController {
               qty: value.qty,
             });
           }
-
-          order = order[0];
+          order[0].total_qty += value.qty;
+          order[0].total += cost;
         }
 
         // not pre-order
@@ -807,18 +887,19 @@ class UserController {
             food: food,
             qty: value.qty,
           });
+          order[0].total_qty += value.qty;
+          order[0].total += cost;
+          order[0].order_total += cost;
         }
+        order = order[0];
       }
 
-      // do the maths
-      order = util.solve_order_math_problem(order);
-
+      // save order and food
       await Connection
         .transaction(async () => {
           const gather_task = Promise.all([food.save(), order.save()])
           // save
           await gather_task;
-          
         });
 
       return res
@@ -844,6 +925,26 @@ class UserController {
 
   static async checkout(req, res) {
     try {
+      /**
+       * Check if the order type is delivery.
+       * 
+       * @param {object} req - The request object.
+       * @returns {boolean} - True if the order type is delivery, false otherwise.
+       * @throws {Error} - If there is an error while checking the order type.
+       */
+      const gossip = (req) => {
+        try {
+          // Check if the order type is delivery
+          if (req.body.type === Order_type.delivery) {
+            return true;
+          }
+          return false;
+        } catch (error) {
+          // Throw any error that occurs while checking the order type
+          throw error;
+        }
+      };
+
       const schema = Joi.object({
         order_id: Joi
           .string()
@@ -852,9 +953,73 @@ class UserController {
           .string()
           .valid(...Object.values(Order_type))
           .default(Order_type.pickup),
-        pre_order: Joi
-          .boolean()
-          .default(false),
+        if_delivery: Joi
+          .object({
+            if_old_addres: Joi
+              .boolean()
+              .required(),
+            address_id: Joi
+              .string()
+              .custom((value, helpers) => {
+                const { if_old_address, type } = this.context();
+
+                if(if_old_address) {
+                  if(value) {
+                    return value;
+                  }
+                  return helpers.error('invalid request, for address_id');
+                }
+                return;
+              }),
+            new_address: Joi
+              .object({
+                where: Joi
+                  .string()
+                  .valid(...Object.values(Where))
+                  .default(Where.other),
+                addy: Joi
+                  .string()
+                  .required(),
+                city: Joi
+                  .string()
+                  .required(),
+                country: Joi
+                  .string()
+                  .valid(...Object.values(Countries))
+                  .default(Countries.nigeria),
+                states: Joi
+                  .string()
+                  .valid(...Object.values(States))
+                  .default(States.lagos),
+                zip_code: Joi
+                  .string()
+                  .length(6)
+                  .pattern(/^[0-9]+$/)
+                  .required(),
+                local_description: Joi
+                  .string(),
+              })
+              .custom((value, helpers) => {
+                const { if_old_address, type } = this.context();
+
+                if(!if_old_address) {
+                  if(value) {
+                    return value;
+                  }
+                  return helpers.error('invalid request, address is required');
+                }
+                return;
+              }),
+          })
+          .custom((value, helpers) => {
+            if(gossip()) {
+              if(value) {
+                return value;
+              }
+              return helpers.error('invalid request, address is required');
+            }
+            return;
+          }),
       });
 
       // validate body
@@ -864,11 +1029,12 @@ class UserController {
         throw error;
       }
 
+      const order = await Order
+        .findById(value.order_id)
+        .exec();
+
       // check if recipe exists
-      const food = await Food
-                    .findById(value.food_id)
-                    .exec();
-      if(!food) {
+      if(!order) {
         return res
           .status(400)
           .json({
@@ -876,36 +1042,28 @@ class UserController {
           });
       }
 
-      const user = await user_repo.findByEmail(req.user.email);
-
-      let order = await Order
-        .find({
-          user: user,
-          status: Order_Status.in_cart,
-        });
-      
-      // if no existing cart
-      if(!order) {
-        order = await Order.create({
-          user: user,
-          status: Order_Status.in_cart,
-          order_content: [{
-            food: food,
-            qty: value.qty,
-          }],
-          order_total: food.price * value.qty,
-        });
-      } else {
-        // if existing cart
-        order.order_content.push({
-          food: food,
-          qty: value.qty,
-        });
-        order.order_total += food.price * value.qty;
+      const user = await user_repo.findByEmail(req.user.email, ['_id']);
+      // validating order,user
+      if(order.user !== user._id) {
+        return res
+          .status(400)
+          .json({
+            msg: 'Bad Request, Invalid credentials',
+          });
       }
 
-      // save
-      await order.save();
+      // to be continued
+
+      // if delivery
+      if(value.type === Order_type.pickup) {
+
+      }
+
+      // if pickup
+      if(value.type === Order_type.delivery) {
+
+      }
+
       return res
         .status(201)
         .json({
@@ -1343,6 +1501,176 @@ class UserController {
         });
     } catch (error) {
       
+      if (error instanceof MongooseError) {
+        console.log('We have a mongoose problem', error.message);
+        return res.status(500).json({msg: error.message});
+      }
+      if (error instanceof JsonWebTokenErro) {
+        console.log('We have a jwt problem', error.message);
+        return res.status(500).json({msg: error.message});
+      }
+      console.log(error);
+      return res.status(500).json({msg: error.message});
+    }
+  }
+
+  static async get_order(req, res) {
+    // serves both user and admin
+    try {
+      if(!req.params.id) {
+        return res
+          .status(400)
+          .json({ msg: 'Bad request, id is required'});
+      }
+
+      const order = await Order.findById(req.params.id);
+
+      // validates order
+      if(!order) {
+        return res
+          .status(400)
+          .json({ msg: 'Invalid Request, order does not exist'});
+      }
+
+      // if not order.user or admin
+      if((req.user.id !== order.user.toString()) || (![Role.admin, Role.super_admin].includes(req.user.role))) {
+        return res
+          .status(400)
+          .json({ msg: 'Bad request, Invalid credentials'});
+      }
+
+      return res
+        .status(200)
+        .json({ order});
+    } catch (error) {
+      if (error instanceof MongooseError) {
+        console.log('We have a mongoose problem', error.message);
+        return res.status(500).json({msg: error.message});
+      }
+      if (error instanceof JsonWebTokenErro) {
+        console.log('We have a jwt problem', error.message);
+        return res.status(500).json({msg: error.message});
+      }
+      console.log(error);
+      return res.status(500).json({msg: error.message});
+    }
+  }
+
+  static async get_transaction(req, res) {
+    // serves both user and admin
+    try {
+      if(!req.params.id) {
+        return res
+          .status(400)
+          .json({ msg: 'Bad request, id is required'});
+      }
+
+      const transaction = await Transaction.findById(req.params.id);
+
+      // validates transaction
+      if(!transaction) {
+        return res
+          .status(400)
+          .json({ msg: 'Invalid Request, transaction does not exist'});
+      }
+
+      // if not order.user or admin
+      if((req.user.id !== transaction.user.toString()) || (![Role.admin, Role.super_admin].includes(req.user.role))) {
+        return res
+          .status(400)
+          .json({ msg: 'Bad request, Invalid credentials'});
+      }
+
+      return res
+        .status(200)
+        .json({ transaction});
+    } catch (error) {
+      if (error instanceof MongooseError) {
+        console.log('We have a mongoose problem', error.message);
+        return res.status(500).json({msg: error.message});
+      }
+      if (error instanceof JsonWebTokenErro) {
+        console.log('We have a jwt problem', error.message);
+        return res.status(500).json({msg: error.message});
+      }
+      console.log(error);
+      return res.status(500).json({msg: error.message});
+    }
+  }
+
+  static async get_shipment(req, res) {
+    // serves both user and admin
+    try {
+      if(!req.params.id) {
+        return res
+          .status(400)
+          .json({ msg: 'Bad request, id is required'});
+      }
+
+      const shipment = await Shipment
+        .findById(req.params.id)
+        .populate('order', 'user');
+
+      // validates shipment
+      if(!shipment) {
+        return res
+          .status(400)
+          .json({ msg: 'Invalid Request, shipment does not exist'});
+      }
+
+      // if not order.user or admin
+      if((req.user.id !== shipment.order.user.toString()) || (![Role.admin, Role.super_admin].includes(req.user.role))) {
+        return res
+          .status(400)
+          .json({ msg: 'Bad request, Invalid credentials'});
+      }
+
+      return res
+        .status(200)
+        .json({ shipment});
+    } catch (error) {
+      if (error instanceof MongooseError) {
+        console.log('We have a mongoose problem', error.message);
+        return res.status(500).json({msg: error.message});
+      }
+      if (error instanceof JsonWebTokenErro) {
+        console.log('We have a jwt problem', error.message);
+        return res.status(500).json({msg: error.message});
+      }
+      console.log(error);
+      return res.status(500).json({msg: error.message});
+    }
+  }
+
+  static async get_address(req, res) {
+    // serves both user and admin
+    try {
+      if(!req.params.id) {
+        return res
+          .status(400)
+          .json({ msg: 'Bad request, id is required'});
+      }
+
+      const address = await Address.findById(req.params.id);
+
+      // validates address
+      if(!address) {
+        return res
+          .status(400)
+          .json({ msg: 'Invalid Request, address does not exist'});
+      }
+
+      // if not order.user or admin
+      if((req.user.id !== address.user.toString()) || (![Role.admin, Role.super_admin].includes(req.user.role))) {
+        return res
+          .status(400)
+          .json({ msg: 'Bad request, Invalid credentials'});
+      }
+
+      return res
+        .status(200)
+        .json({ address});
+    } catch (error) {
       if (error instanceof MongooseError) {
         console.log('We have a mongoose problem', error.message);
         return res.status(500).json({msg: error.message});

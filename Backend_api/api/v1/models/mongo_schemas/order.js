@@ -41,9 +41,8 @@ const pre_orderSchema = new Schema({
     type: [orderItemSchema],
     required: true,
   },
-  delivery_time: {
-    type: Date,
-    required: true,
+  total_qty: {
+    type: Number,
   },
   status: {
     type: String,
@@ -70,6 +69,10 @@ const pre_orderSchema = new Schema({
   shipment: {
     type: Schema.Types.ObjectId,
     ref: Collections.Shipment,
+    default: null,
+  },
+  ready_time: {
+    type: Date,
     default: null,
   },
 }, { timestamps: true });
@@ -100,6 +103,9 @@ const orderSchema = new Schema({
     type: Number,
     default: 0,
   },
+  total_qty: {
+    type: Number,
+  },
   transaction: {
     type: Schema.Types.ObjectId,
     ref: Collections.Transaction,
@@ -118,6 +124,10 @@ const orderSchema = new Schema({
   shipment: {
     type: Schema.Types.ObjectId,
     ref: Collections.Shipment,
+    default: null,
+  },
+  pickup_time: {
+    type: Date,
     default: null,
   },
 }, { timestamps: true });

@@ -1,14 +1,13 @@
 require('dotenv').config();
 const util = require('../util');
-const { user_repo, User } = require('../repos/user_repo');
-const { Food, food_repo } = require('../repos/food_repo');
-const { Review, review_repo } = require('../repos/review_repo');
-const { Order, order_repo } = require('../repos/order_repo');
-const { Transaction, transaction_repo } = require('../repos/transaction_repo');
+const { page_info, User, Food, Review, Order, Transaction, Connection } = require('../models/engine/db_storage');
+const { user_repo } = require('../repos/user_repo');
+const { food_repo } = require('../repos/food_repo');
+const { review_repo } = require('../repos/review_repo');
 const { notification_service } = require('../services/notification_service');
-const { Notification, notification_repo } = require('../repos/notification_repo');
-const { Connection } = require('../models/engine/db_storage');
+const { notification_repo } = require('../repos/notification_repo');
 const MongooseError = require('mongoose').Error;
+const { Types } = require('mongoose');
 const JsonWebTokenErro = require('jsonwebtoken').JsonWebTokenError;
 const Joi = require('joi');
 const { get_schedule_expiry } = require('../models/mongo_schemas/food');
@@ -21,7 +20,11 @@ const {
   Order_Status, 
   Transaction_Status, 
   Schedule_type, 
-  Schedule_expiry_prefix
+  Schedule_expiry_prefix,
+  Time_share,
+  Events,
+  Order_type,
+  Pre_order_Status,
  } = require('../enum_ish');
 /**
  * Contains the UserController class 
@@ -110,17 +113,18 @@ class AdminController {
           .default(0),
         price: Joi
           .number()
-          .precision(4),
-        type: Joi
-          .string()
-          .valid(...Object.values(Type))
-          .default(Type.food)
+          .precision(4)
+          .required(),
+        types: Joi
+          .array()
+          .items(Joi.string().valid(...Object.values(Type)))
+          .default([Type.food])
       });
 
       // validate body
       const { value, error } = schema.validate(req.body);
       
-      if (error) {
+      if (error) { 
         throw error;
       }
 
@@ -170,6 +174,49 @@ class AdminController {
 
   static async update_food(req, res) {
     try {
+      /**
+       * Determines the gossip value based on the provided request body.
+       * 
+       * @param {object} req_body - The req.body object.
+       * @returns {(boolean|Array<Type>|)} - The gossip value.
+       */
+      const gossip = (req_body) => {
+        try {
+          if (req_body.types) {
+            const { event, types } = req_body.types;
+          
+            if (event === Events.add || event === Events.remove) {
+              if (types.length > 0) {
+                return true;
+              }
+              return false;
+            }
+          
+            if (event === Events.overwrite) {
+              if (types.length > 0) {
+                return [Type.food, ...types]; // For Events.overwrite return a modified value to add Type.food by default
+              }
+              return false;
+            }
+          
+            if (event === Events.clear) {
+              if (types.length > 0) {
+                return {
+                  status: 400,
+                  response: {
+                    msg: `Concerning request: there shouldnt be any data in types.types for this action, choose remove to remove the data in types.types`,
+                    data: types,
+                  },
+                };
+              }
+              return true;
+            }
+          }
+        } catch (error) {
+          throw error;
+        }
+      };
+
       const schema = Joi.object({
         id: Joi
           .string()
@@ -184,10 +231,28 @@ class AdminController {
           price: Joi
             .number()
             .precision(4),
-          type: Joi
-            .string()
-            .valid(...Object.values(Type))
-          }),
+          types: Joi
+            .object({
+              event: Joi
+                .string()
+                .valid(...Object.values(Events))
+                .default(Events.add),
+              types: Joi
+                .array()
+                .items(Joi.string().valid(...Object.values(Type)))
+                .custom((value, helpers) => {
+                  const gist = gossip(req.body);
+                  if(gist === false) {
+                    return helpers.error('Validation Error: types not valid');
+                  }
+                  if(gist.length) {
+                    value = gist;
+                    return value;
+                  }
+                  return;
+                }),
+            })
+          })
       });
 
       // validate body
@@ -204,9 +269,20 @@ class AdminController {
             msg: 'Invalid request, update data is required',
           });
       }
+      
+      const food_exists = await Food.exists({name: value.name});
+      
+      // if food already created by user
+      if (food_exists) {
+        return res
+          .status(400)
+          .json({
+            msg: `Invalid request, you already have a ${value.name} Food, choose another name`,
+          });
+      }
 
-      const food = await Food.findByIdAndUpdate(value.id, value.update);
       // validate food
+      const food = await Food.findById(value.id);
       if (!food) {
         return res
           .status(400)
@@ -214,6 +290,55 @@ class AdminController {
             msg: `Invalid request, There is no food with id: ${value.id}`,
           })
       }
+
+      if(value.name)
+      {
+        // notify food favors
+        // update certain cache
+        food.name = value.name;
+      }
+
+      if(value.description)  {
+        // notify food favors
+        // update certain cache
+        food.description = value.description;
+      }
+
+      if(value.qty) {
+        // notify food favors
+        // update certain cache
+        food.qty = value.qty;
+      }
+
+      if(value.price) {
+        // notify food favors
+        // update certain cache
+        food.price = value.price;
+      }
+
+      if(value.types) {
+        // update certain cache
+        if(value.types.event === Events.add) {
+          food.types = food.types.concat(value.types.types);
+        }
+
+        if(value.types.event === Events.remove) {
+          food.types = food.types.filter(type => {
+            return value.types.types.includes(type) === false;
+          })
+        }
+
+        if(value.types.event === Events.overwrite) {
+          food.types = value.types.types;
+        }
+
+        if(value.types.event === Events.clear) {
+          food.types = [Type.food];
+        }
+
+      }
+      // }
+
 
       // await Connection.transaction(async () => {
       //     if (user.followers) {
@@ -252,12 +377,15 @@ class AdminController {
           .required(),
         schedules: Joi
           .array()
-          .items(Joi.string())
+          .items(Joi.date())
           .required(),
         type: Joi
-          .string()
-          .valid(...Object.values(Schedule_type))
-          .default(Schedule_type.one_off),
+          .array()
+          .items(Joi.string().valid(...Object.values(Schedule_type)))
+          .default([Schedule_type.one_off, Schedule_type.one_off, Schedule_type.one_off, Schedule_type.one_off]),
+        hashtag: Joi
+          .array()
+          .items(Joi.string()),
       });
 
       // validate body
@@ -267,31 +395,54 @@ class AdminController {
         throw error;
       }
 
+      let { type, hashtag } = value;
+      let schedules = [];
+
       /**
-       * Validates the ISO format and timing of each schedule in the given value.
+       * Validates the timing of each schedule in the given value.
        *
-       * @return {boolean} Returns true if all schedules are in ISO format and have a timing in the future, otherwise false.
+       * @return {boolean} Returns true if all schedules have a reasonable timing in the future, otherwise false.
        */
-      const validate_iso_and_timing = () => {
-        const isoStringRegex = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
-        return value.schedules.every((schedule) => isoStringRegex.test(schedule)) && value.schedules.every((schedule) => {
-          const date = new Date(schedule);
-          return date.getTime() > Date.now();
+      const validate_timing = () => {
+        let index = 0;
+        return value.schedules.every((schedule) => {
+          let new_schedule =  {
+            for_when: schedule,
+            type: type[index],
+          };
+          let expiry_time = get_schedule_expiry(new_schedule);
+          const reasonable = (expiry_time.getTime() - Time_share.hour) > Date.now(); //this means time to set expiration of schedule and for users to have ample time to preorder have been set to 1hour b4 schedule expiration.
+
+          // collect schedule
+          if(!reasonable) {
+            return reasonable;
+          }
+          new_schedule.hashtag = hashtag ? `#${hashtag.toLocaleLowerCase()}` : null;
+          new_schedule.expiry_time = expiry_time;
+
+          schedules.push(new_schedule);
+
+          index++;
+          return reasonable;
         });
       };
 
+      //promised food
+      const food_pr = Food
+        .findById(value.id)
+        .select('schedules _id name');
+
       // validate schedules
-      if(!validate_iso_and_timing()) {
+      if(!validate_timing()) {
         return res
           .status(400)
           .json({
-            msg: 'Invalid request, schedules must be in ISO format and must be in the future',
+            msg: 'Invalid request, schedules must have a reasonable timing in the future',
           });
       }
 
-      const food = await Food
-        .findById(value.id)
-        .exec();
+      // collect food
+      const food = await food_pr;
     
       // validate food
       if(!food) {
@@ -302,67 +453,46 @@ class AdminController {
           });
       }
 
+      // check if schedule already exists
+      let exists_msg = ""
+      const does_not_exists = food.schedules.every((host_schedule) => {
+        return schedules.every((schedule) => {
+          const exists = schedule.for_when === host_schedule.for_when
+          if(exists) {
+            exists_msg = `Oops, food already has schedule: ${schedule.for_when.toISOString()}`;
+            return false;
+          }
+          return true;
+        });
+      });
+
+      if(does_not_exists === false) {
+        return res
+          .status(400)
+          .json({
+            msg: exists_msg,
+          });
+      }
+
       let scheduled_flag = false;
 
       // check if only one schedule is provided
-      if((scheduled_flag === false) && value.schedules.length === 1) {
-        const s_time = new Date(value.schedules[0]);
-        // create new schedule
-        let new_schedule = {
-          for: s_time,
-          type: value.type,
-        };
-        new_schedule.expiry_time = new Date(get_schedule_expiry(new_schedule));
-        // check if food already has this schedule
-        if((food.schedules.length > 0) && (!food.schedules.every((schedule) => schedule.for !== new_schedule.for))) {
-          return res
-            .status(400)
-            .json({
-              msg: `Oops, food already has schedule: ${value.schedules[0]}`,
-            });
-        }
-        // add schedule
-        food.schedules.push(new_schedule);
+      if((scheduled_flag === false) && schedules.length === 1) {
+        food.schedules.push(schedules[0]);
         scheduled_flag = true;
       }
 
       // check if more than one schedule is provided
-      if((scheduled_flag === false) && value.schedules.length > 1) {
+      if((scheduled_flag === false) && schedules.length > 1) {
          // check if food has schedules
         if((scheduled_flag === false) && food.schedules.length === 0) {
-          let new_schedules = value.schedules.map(schedule => {
-            const new_schedule = {
-              for: new Date(schedule),
-              type: value.type,
-              expiry_time: new Date(get_schedule_expiry({for: new Date(schedule), type: value.type})),
-            };
-            return new_schedule;
-          });
-
-          food.schedules = new_schedules;
+          food.schedules = schedules;
           scheduled_flag = true;
         }
 
+        // if it has multiple schedules
         if((scheduled_flag === false) && food.schedules.length > 0) {
-          let new_schedules = value.schedules.map(schedule => {
-            const new_schedule = {
-              for: new Date(schedule),
-              type: value.type,
-              expiry_time: new Date(get_schedule_expiry({for: new Date(schedule), type: value.type})),
-            };
-
-            if(!food.schedules.every((schedule) => schedule.for !== new_schedule.for)) {
-              return res
-                .status(400)
-                .json({
-                  msg: `Oops, food already has schedule: ${schedule}`,
-                });
-            }
-
-            return new_schedule;
-          });
-
-          food.schedules = [...food.schedules, ...new_schedules];
+          food.schedules = [...food.schedules, ...schedules];
           scheduled_flag = true;
         }
       }
@@ -493,30 +623,373 @@ class AdminController {
           });
       }
 
-      const gather_data_task = Promise.all([
-        User
-        .find(value.filter)
-        .skip((value.page - 1) * value.size)
-        .limit(value.size)
-        .sort({ createdAt: -1 })
-        .exec(), //get users
-        user_repo.has_next_page(value.filter, value.page, value.size), //if there is a next page
-        user_repo.total_pages(value.filter, value.size), //get total pages
-      ]);
+      const { haveNextPage, currentPageExists, totalPages } = await page_info(filter, Collections.User, value.size, value.page);
 
-      const datas = await gather_data_task;
+      let gather_data = [];
+
+      if(currentPageExists) {
+        const users = await User
+          .find(filter)
+          .skip((value.page - 1) * value.size)
+          .limit(value.size)
+          .sort({ createdAt: -1 })
+          .exec(); //get orders
+
+        gather_data = [
+          users,
+          haveNextPage, //have next page
+          totalPages, //total pages
+        ];
+      }
+
+      if(!currentPageExists) {
+        gather_data = [
+          [],
+          haveNextPage, //have next page
+          totalPages, //total pages
+        ];
+      }
 
       return res
         .status(200)
         .json({
-          users: datas[0],
-          have_next_page: datas[1],
-          total_pages: datas[1],
+          users: gather_data[0],
+          have_next_page: gather_datas[1],
+          total_pages: gather_data[1],
         });
         
     } catch (error) {
       if (error instanceof MongooseError) {
         console.log('We have a mongoose problem', error.message);
+        return res.status(500).json({msg: error.message});
+      }
+      if (error instanceof JsonWebTokenErro) {
+        console.log('We have a jwt problem', error.message);
+        return res.status(500).json({msg: error.message});
+      }
+      console.log(error);
+      return res.status(500).json({msg: error.message});
+    }
+  }
+
+  static async get_orders(req, res) {
+    try {
+      // validate body
+      const schema = Joi.object({
+        count: Joi
+          .boolean()
+          .default(false),
+        pre_order: Joi
+          .boolean()
+          .default(false),
+        filter: Joi
+          .object({
+            user: Joi
+              .string(),
+            type: Joi
+              .string()
+              .valid(...Object.values(Order_type))
+              .default(Order_type.pickup),
+            pre_orders: Joi
+              .object({
+                type: Joi
+                  .string()
+                  .valid(...Object.values(Order_type))
+                  .default(Order_type.pickup),
+                status: Joi
+                  .string()
+                  .valid(...Object.values(Pre_order_Status))
+                  .default(Pre_order_Status.created),
+                total_range: Joi
+                  .array()
+                  .items(Joi.number().integer().precision(2)),
+                order_total_range: Joi
+                  .array()
+                  .items(Joi.number().integer().precision(2)),
+                qty_range: Joi
+                  .array()
+                  .items(Joi.number().integer()),
+                order_content: Joi
+                  .object({
+                    food: Joi
+                      .string(),
+                    qty_range: Joi
+                      .array()
+                      .items(Joi.number().integer()),
+                    paid_price_range: Joi
+                      .array()
+                      .items(Joi.number().integer()),
+                  }),
+                pickup_time_range: Joi
+                  .object({
+                    time_share: Joi
+                      .string()
+                      .valid(...Object.values(Time_share))
+                      .default(Time_share.day),
+                    times: Joi
+                      .number()
+                      .integer()
+                      .default(1),
+                  })
+              }),
+            status: Joi
+              .string()
+              .valid(...Object.values(Order_Status))
+              .default(Order_Status.in_cart),
+            total_range: Joi
+              .array()
+              .items(Joi.number().integer().precision(2)),
+            order_total_range: Joi
+              .array()
+              .items(Joi.number().integer().precision(2)),
+            qty_range: Joi
+              .array()
+              .items(Joi.number().integer()),
+            order_content: Joi
+              .object({
+                food: Joi
+                  .string(),
+                qty_range: Joi
+                  .array()
+                  .items(Joi.number().integer()),
+                paid_price_range: Joi
+                  .array()
+                  .items(Joi.number().integer()),
+              }),
+            pickup_time_range: Joi
+              .object({
+                time_share: Joi
+                  .string()
+                  .valid(...Object.values(Time_share))
+                  .default(Time_share.day),
+                times: Joi
+                  .number()
+                  .integer()
+                  .default(1),
+              })
+          }),
+        page: Joi
+          .number()
+          .integer()
+          .default(1),
+        size: Joi
+          .number()
+          .integer()
+          .default(20),
+      });
+
+      // validate body
+      const { value, error } = schema.validate(req.body);
+      
+      if (error) {
+        throw error;
+      }
+
+      const { count, pre_order, filter, page, size } = value;
+
+      // steal some seconds if value.query.user is set and validate user
+      let a_user_wish = null;
+      if(filter?.user) {
+        const exists = await User.exists({_Id: Types.ObjectId(filter.user)});
+        if(!exists) {
+          return res
+            .status(400)
+            .json({
+              message: 'Bad request, User does not exist',
+            })
+        }
+        // make a wish
+        a_user_wish = User
+          .findById()
+          .select('_id')
+          .exec(); //get user
+      }
+
+      let query = {};
+      // if query is set
+      if(filter) {
+        // building filter
+        const {
+          user, 
+          type, 
+          status, 
+          total_range, 
+          qty_range, 
+          pickup_time_range, 
+          order_total_range, 
+          order_content,
+          pre_orders
+         } = filter;
+
+        if(order_content) {
+          if(order_content.paid_price_range) {
+            order_content.paid_price = util.sort_array_filter(order_content.paid_price_range, res);
+          }
+          if(order_content.qty_range) {
+            order_content.qty = util.sort_array_filter(order_content.qty_range, res);
+          }
+          if(order_content.food_query) {
+            if(order_content.food_query.types) {
+              order_content.food.types = { $in:  order_content.food_query.types};
+            }
+            if(order_content.food_query.name) {
+              order_content.food.name = order_content.food_query.name;
+            }
+            if(order_content.food_query.fave_count) {
+              order_content.food.fave_count = util.sort_array_filter(order_content.food_query.fave_count, res);
+            }
+          }
+          query.order_content = { $elemMatch: order_content };
+        }
+
+        if(pre_orders) {
+          const { 
+            type, 
+            status, 
+            total_range, 
+            qty_range, 
+            pickup_time_range, 
+            order_total_range, 
+            order_content,
+           } = pre_orders;
+
+           let pre_orders_query = {};
+
+          if(pre_orders.order_content) {
+            let order_content_query = {};
+            if(order_content.paid_price_range) {
+              order_content_query.paid_price = util.sort_array_filter(order_content.paid_price_range, res);
+            }
+            if(order_content.qty_range) {
+              order_content_query.qty = util.sort_array_filter(order_content.qty_range, res);
+            }
+            if(order_content.food_query) {
+              order_content_query.food = {};
+              if(order_content.food_query.types) {
+                order_content_query.food.types = { $in:  order_content.food_query.types};
+              }
+              if(order_content.food_query.name) {
+                order_content_query.food.name = order_content.food_query.name;
+              }
+              if(order_content.food_query.fave_count) {
+                order_content_query.food.fave_count = util.sort_array_filter(order_content.food_query.fave_count, res);
+              }
+            }
+            pre_orders_query.order_content = { $elemMatch: order_content_query };
+          }
+
+          if(total_range) {
+            pre_orders_query.total = util.sort_array_filter(total_range, res);
+          }
+  
+          if(order_total_range) {
+            pre_orders_query.order_total = util.sort_array_filter(order_total_range, res);
+          }
+  
+          if(qty_range) {
+            pre_orders_query.total_qty = util.sort_array_filter(qty_range, res);
+          }
+  
+          if(pickup_time_range) {
+            const now = new Date();
+            const minus_time = pickup_time_range.time_share * pickup_time_range.times;
+            const time = new Date(now.getTime() - minus_time);
+            pre_orders_query.ready_time = { $gte: time };
+          }
+  
+          if(type) {
+            pre_orders_query.type = type;
+          }
+  
+          if(status) {
+            pre_orders_query.status = status;
+          }
+          query.pre_orders = { $elemMatch: pre_orders_query };
+        }
+
+        if(total_range) {
+          query.total = util.sort_array_filter(total_range, res);
+        }
+
+        if(order_total_range) {
+          query.order_total = util.sort_array_filter(order_total_range, res);
+        }
+
+        if(qty_range) {
+          query.total_qty = { $gte: qty_range[0], $lte: qty_range[1] };
+        }
+
+        if(pickup_time_range) {
+          const now = new Date();
+          const minus_time = pickup_time_range.time_share * pickup_time_range.times;
+          const time = new Date(now.getTime() - minus_time);
+          query.pickup_time = { $gte: time };
+        }
+
+        if(type) {
+          query.type = type;
+        }
+
+        if(status) {
+          query.status = status;
+        }
+
+        if(user) {
+          //wish granted, you are welcome.
+          query.user = await a_user_wish;
+        }
+      }
+
+      // if count is true, consumer just wants a count of the filtered documents
+      if (count) {
+        const result = await Order
+            .countDocuments(query);
+
+        return res
+          .status(200)
+          .json({
+            count: result,
+          });
+      }
+
+      const { haveNextPage, currentPageExists, totalPages } = await page_info(query, Collections.Order, size, page);
+
+      let gather_data = [];
+
+      if(currentPageExists) {
+        const orders = await Order
+          .find(query)
+          .skip((page - 1) * size)
+          .limit(size)
+          .sort({ createdAt: -1 })
+          .exec(); //get orders
+
+        gather_data = [
+          pre_order ? orders.map((order) => order.pre_orders).flat() : orders,
+          haveNextPage, //have next page
+          totalPages, //total pages
+        ];
+      }
+
+      if(!currentPageExists) {
+        gather_data = [
+          [],
+          haveNextPage, //have next page
+          totalPages, //total pages
+        ];
+      }
+
+      return res
+        .status(200)
+        .json({
+          orders: gather_data[0],
+          have_next_page: gather_data[1],
+          total_pages: gather_data[2],
+        });
+        
+    } catch (error) {
+      if (error instanceof MongooseError) {
+        console.log('We have a mongoose problem', error);
         return res.status(500).json({msg: error.message});
       }
       if (error instanceof JsonWebTokenErro) {

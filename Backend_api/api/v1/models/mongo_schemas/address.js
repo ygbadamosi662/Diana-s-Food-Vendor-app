@@ -1,5 +1,5 @@
 const { Schema } = require('mongoose');
-const { Collections, Where } = require('../../enum_ish');
+const { Collections, Where, States } = require('../../enum_ish');
 
 
 const addressSchema = new Schema({
@@ -23,15 +23,19 @@ const addressSchema = new Schema({
   },
   state: {
     type: String,
-    required: true,
+    enum: Object.values(States),
+    default: States.lagos,
   },
   country: {
     type: String,
     required: true,
   },
-  zipcode: {
+  zip_code: {
     type: Number,
     required: true,
+  },
+  local_description: {
+    type: String,
   }
 }, { timestamps: true });
 

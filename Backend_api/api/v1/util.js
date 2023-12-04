@@ -1,5 +1,6 @@
 const bcrypt = require('bcrypt');
-const { Order_Status, Order_type } = require('./enum_ish');
+const { Order_Status, Order_type, Collections, Pre_order_Status } = require('./enum_ish');
+const { Order, Food} = require('./models/engine/db_storage');
 const { shipping_service } = require('./services/shipping_service');
 
 /**
@@ -50,96 +51,48 @@ class Utility {
   }
 
   /**
-   * Makes sense of an array of two elements and returns a range filter object.
+   * Makes sense of an array of two elements and returns a mongoose range filter object.
    * @param {Array} arr - The array to make sense of.
    * @param   res - The response object.
-   * @returns {any} - The sorted array or an error response.
+   * @returns {Object} - The range filter object.
    */
   sort_array_filter(arr=null, res) {
-    if(arr) {
-      if(arr.length > 2) {
-        // Return an error response if the array has more than two elements
-        return res
-          .status(400)
-          .json({
+    try {
+      if (arr) {
+        if (arr.length > 2) {
+          return res.status(400).json({
             msg: 'array only expects two elements'
           });
+        }
+        if (arr.length === 1) {
+          return arr[0];
+        }
+        if (arr.length === 2) {
+          // Return an object suitable for range query
+          return { $gte: arr[0], $lte: arr[1] };
+        }
       }
-      if(arr[0] === arr[1]) {
-        // Return the first element if both elements are equal
-        return arr[0];
-      }
-      if(arr.length === 1) {
-        // Return the only element if the array has only one element
-        return arr[0];
-      }
-      if(arr.length === 2) {
-        // Return a range object if the array has two elements
-        return { $lte: arr[1], $gte: arr[0] };
-      }
+    } catch (error) {
+      throw error;
     }
   };
 
-/**
- * Solves the order math problem.
- *
- * @param {null | object} order - The order object to be processed.
- * @return {null | object} Returns null if the order parameter is not provided and returns processed order when provided.
- */
-  solve_order_math_problem(order=null) {
-    if(!order) {
-      return null;
+  /**
+   * Checks if the given food can fulfill the order quantity.
+   *
+   * @param {Object} food - The food object to check.
+   * @param {number} qty - The quantity of food needed.
+   * @return {boolean} True if the food can fulfill the order quantity, false otherwise.
+   */
+  can_food_fullfill_order (food=null, qty=1) {
+    try {
+      if(!food) {
+        return false;
+      }
+      return food.qty >= qty;
+    } catch (error) {
+      throw error;
     }
-
-    let { 
-      order_content, 
-      pre_orders,
-      status, 
-      type
-    } = order;
-
-    if(status === Order_Status.in_cart) {
-      // total cost of not-preordered items
-      if(order_content.length > 0) {
-        order.order_total = order_content.reduce((acc, item) => {
-          return acc + (item.food.price * item.qty);
-        }, 0);
-        // if type of not-preordered items is delivery
-        if(type === Order_type.delivery) {
-          order.order_shipping_fee = shipping_service.get_fee();
-        }
-      }
-      // handle pre-orders
-      let no_math_problem_pre_orders = [];
-      if(pre_orders.length > 0) {
-        no_math_problem_pre_orders = pre_orders.map((pre_order) => {
-          console.log(pre_order)
-          pre_order.order_total = pre_order.order_content.reduce((acc, item) => {
-            return acc + (item.food.price * item.qty);
-          }, 0);
-
-          if(pre_order.type === Order_type.delivery) {
-            pre_order.shipping_fee = shipping_service.get_fee();
-          }
-          pre_order.total = pre_order.order_total + pre_order.shipping_fee;
-          return pre_order;
-        });
-      }
-
-      let total_pre_orders = no_math_problem_pre_orders.reduce((acc, pre_order) => {
-        return acc + pre_order.total;
-      }, 0);
-
-      order.total = order.order_total + order.order_shipping_fee + total_pre_orders;
-
-      if(pre_orders.length > 1) {
-        order.pre_orders = no_math_problem_pre_orders;
-      }
-      if(pre_orders.length === 1) {
-        order.pre_order = [no_math_problem_pre_orders[0]];
-      }
-    }
-    return order;
   }
 }
 

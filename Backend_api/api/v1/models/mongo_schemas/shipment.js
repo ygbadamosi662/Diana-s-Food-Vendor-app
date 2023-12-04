@@ -22,6 +22,13 @@ const shipmentSchema = new Schema({
     enum: Object.values(Shipemnt_status),
     default: Shipemnt_status.pending,
   },
+  estimated_delivery_time: {
+    type: Date,
+    required: true,
+  },
+  delivery_time: {
+    type: Date,
+  },
   fee: {
     type: Number,
     required: true,

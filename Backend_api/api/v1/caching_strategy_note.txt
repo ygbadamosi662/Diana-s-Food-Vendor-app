@@ -1,0 +1,9 @@
+im going to set a max_number of cache for certain operations to control memory usage to ensure a stable strong permomance and wheb the cache is full the least recently used item will be evicted(so ill implement lru cache)
+im going to cache by using a formtatted string that will be used as a key to the cache, will contain the operation and the parameters of the operation
+to avoid unnecessary call to an expensive operation(specifically in solving the order math problem) i will cache each user's open cart, the user's id prefixed with "CART" will be the key to a JSON.stringiy({
+    order: order_id,
+    foods: [food_id], to track price and qty change in any food we have in our cart
+    cache: current_cache
+})
+set expiration time to certain key format based on operation and need to be fresh.
+for operations fetching resource from the database ill be caching by query.
