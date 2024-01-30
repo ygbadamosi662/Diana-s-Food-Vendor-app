@@ -1,12 +1,11 @@
-const { user_repo, User } = require('../repos/user_repo');
-const { storage, Connection } = require('../models/engine/db_storage')
+const { storage, Connection, User } = require('../models/engine/db_storage')
 const util = require('../util');
 const { jwt_service } = require('../services/jwt_service');
 const { Mail_sender } = require('../services/mail_service');
 const Joi = require('joi');
 const crypto = require('crypto');
 const jwt_web = require('jsonwebtoken');
-const { Role, Gender } = require('../enum_ish')
+const { Role, Gender, userStatus } = require('../enum_ish')
 const mongoose = require('mongoose');
 const MongooseError = mongoose.Error;
 /**
@@ -20,6 +19,13 @@ class AppController {
     res.status(200).json({ message: 'Welcome To Food Vendor Api!' });
   }
 
+  /**
+   * Register a user.
+   *
+   * @param {Object} req - the request object
+   * @param {Object} res - the response object
+   * @return {Promise} a promise that resolves to the response object
+   */
   static async register_user(req, res) {
     try {
       const schema = Joi.object({
@@ -55,20 +61,19 @@ class AppController {
     }
 
     // check email and phone integrity
-    const integrity_task = Promise.all([
-      user_repo.existsByEmail(value.email),
-      user_repo.existsByPhone(value.phone)
+    const integrity_tasks = await Promise.all([
+      User.exists({ email: value.email }),
+      User.exists({ phone: value.phone })
     ]);
-    const resolves = await integrity_task;
 
-    // handle integrity
-    if (resolves[0] || resolves[1]) {
-      if (resolves[0]) { return res.status(400).json({ msg: 'Email exists'}); }
-      if (resolves[1]) { return res.status(400).json({ msg: 'Phone exists'}); }
+    // valiadate doc integrity
+    if (integrity_tasks[0] || integrity_tasks[1]) {
+      if (integrity_tasks[0]) { return res.status(400).json({ msg: 'Email exists'}); }
+      if (integrity_tasks[1]) { return res.status(400).json({ msg: 'Phone exists'}); }
     }
     
    
-    // persist user to the db
+    // create user
     const user = {
       name: {
         fname: value.fname,
@@ -78,18 +83,24 @@ class AppController {
       phone: value.phone,
       gender: value.gender,
       role: Role.user,
+      status: userStatus.active
     };
 
-    // encrypt pwd
-    user.password = await util.encrypt_pwd(value.password);
+    // encrypt password
+    const pwd = await util.encrypt(value.password);
+    // set password
+    user.password = pwd;
 
-    const resoled_u = await user_repo.create_user(user);
+    const resoled_u = await User.create(user);
     return res
       .status(201)
-      .json({user: {
-        email: resoled_u.email,
-        phone: resoled_u.phone
-      }});
+      .json({
+        user: {
+          email: resoled_u.email,
+          phone: resoled_u.phone,
+          status: userStatus.active,
+        }
+      });
     } catch (error) {
 
       if (error instanceof MongooseError) {
@@ -107,6 +118,13 @@ class AppController {
     }
   }
 
+  /**
+   * Login function that handles the login process for users.
+   *
+   * @param {Object} req - the request object
+   * @param {Object} res - the response object
+   * @return {Promise} a promise that resolves to the response sent to the client
+   */
   static async login(req, res) {
     try {
       const schema = Joi.object({
@@ -125,33 +143,51 @@ class AppController {
         throw error;
       }
 
-      let user = {}
+      let query = {}
 
       // validate email/phone
       if (/^\d+$/.test(value.email_or_phone)) {
-        const who = await user_repo.findByPhone(value.email_or_phone, ['name', 'password', 'role', 'id', 'email', 'gender']);
-        if (!who) {
-          return re
-            .status(400)
-            .json({
-            msg: 'email/phone or password incorrect',
-          });
-        }
-        user = who;
+        query = User.findOne({ phone: value.email_or_phone } , 'name password role id email phone gender status');
       } else {
-        const who = await user_repo.findByEmail(value.email_or_phone, ['name', 'password', 'role', 'id', 'email', 'phone', 'gender']);
+        query = User.findOne({ email: value.email_or_phone } , 'name password role id email phone gender status');
+      }
 
-        if (!who) {
-          return re
-            .status(400)
-            .json({
-            msg: 'email/phone or password incorrect',
-          });
-        }
-        user = who;
+      // validate user
+      const user = await query.exec();
+      if (!user) {
+        return res
+          .status(400)
+          .json({
+          msg: 'email/phone or password or answer incorrect',
+        });
+      }
+
+      if([userStatus.deactivated, userStatus.deleted, userStatus.banned].includes(user.status)) {
+        /**
+         * Resolves the status and returns the corresponding API endpoint.
+         *
+         * @param {string} status - the status to be resolved
+         * @return {string|boolean} the corresponding API endpoint or false if deleted or disabled
+         */
+        const resolve = (status) => {
+          let resolve = false;
+          if(status === userStatus.deactivated) {
+            resolve = '/api/v1/auth/user/reactivate';
+          }
+
+          return resolve;
+        };
+
+        return res
+          .status(400)
+          .json({
+          msg: `Account ${user.status}`,
+          resolve: resolve(user.status),
+        });
       }
       
-      const is_pwd = await util.validate_pwd(value.password, user.password);
+      // validate password
+      const is_pwd = await util.validate_encryption(value.password, user.password);
 
       // validate password
       if (is_pwd === false) {
@@ -163,14 +199,17 @@ class AppController {
       }
 
       const tokens = await jwt_service.generate_token({
-        email: user.email,
         role: user.role,
         id: user._id.toString(),
-        gender: user.gender
+        gender: user.gender,
+        status: user.status
       });
 
-      user.refresh_token = tokens.refreshToken;
+      
+      user.jwt_refresh_token = tokens.refreshToken;
+
       await user.save();
+
       return res
         .status(201)
         .json({
@@ -180,7 +219,8 @@ class AppController {
             role: user.role,
             name: user.name,
             email: user.email,
-            phone: user.phone
+            phone: user.phone,
+            status: user.status
           },
           tokens: tokens,
         });
@@ -194,8 +234,7 @@ class AppController {
         return res
           .status(400)
           .json({
-            error: 'Invalid request body',
-            errors: error.details,
+            msg: error.details,
           });
       }
       console.log(error);
@@ -203,6 +242,13 @@ class AppController {
     }
   }
 
+/**
+ * Refreshes the access token for a user.
+ *
+ * @param {Object} req - The request object.
+ * @param {Object} res - The response object.
+ * @return {Object} The response containing the new access token and user information.
+ */
   static async refreshToken(req, res) {
     try {
       const schema = Joi.object({
@@ -221,7 +267,7 @@ class AppController {
         throw error;
       }
 
-      const user = await User.findById(value.user_id, 'refresh_token email _id role gender').exec();
+      const user = await User.findById(value.user_id, 'jwt_refresh_token email _id role gender').exec();
       // validate user
       if (!user) {
         return res
@@ -232,11 +278,11 @@ class AppController {
       }
 
       // validate refresh user's refresh_token
-      if(user.refresh_token !== value.refresh_token) {
+      if(user.jwt_refresh_token !== value.refresh_token) {
         return res
           .status(400)
           .json({
-            msg: 'Refresh token invalid',
+            msg: 'Invalid Credential, Refresh token invalid',
           });
       }
 
@@ -246,7 +292,7 @@ class AppController {
           return res
             .status(401)
             .json({
-              msg: 'Token expired',
+              msg: 'Refresh Token expired, user should login again',
               second_chance: false
             });
         }
@@ -254,9 +300,8 @@ class AppController {
 
       // refresh access token
       const newAccessToken = await jwt_service.generate_token({
-        email: user.email,
         role: user.role,
-        _id: user._id,
+        id: user._id,
         gender: user.gender
       }, true);
 
@@ -266,12 +311,8 @@ class AppController {
           msg: 'Token refresh succesful',
           user: {
             _id: user._id,
-            role: user.role,
-            name: user.name,
-            email: user.email,
-            phone: user.phone
           },
-          token: newAccessToken,
+          new_token: newAccessToken,
         });
       
     } catch (error) {
@@ -292,16 +333,23 @@ class AppController {
     }
   }
 
+  /**
+   * Logout function that handles logging out a user.
+   *
+   * @param {Object} req - The request object.
+   * @param {Object} res - The response object.
+   * @return {Object} The response with the logged out message.
+   */
   static async logout(req, res) {
     try {
       const authHeader = req.headers.authorization;
       const token = authHeader && authHeader.split(' ')[1]; // Extract the token part
-      const user_promise = user_repo.findByEmail(req.user.email, ['id']);
+      const user = await User.findById(req.user.id).exec();
       const timestamp = new Date().toISOString();
-      let user = await user_promise;
+      
       const jwt = {
         token: token,
-        user: user.id,
+        user: user._id.toString(),
         created_on: timestamp,
       };
 

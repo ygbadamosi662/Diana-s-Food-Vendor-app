@@ -47,7 +47,10 @@ const authenticate_token_middleware = async (req, res, next) => {
     if (jwt_token) {
       return res
       .status(401)
-      .json({ jwt: 'User logged out, login again' });
+      .json({
+        msg: 'Token logged out, get a new access token at /api/v1/general/refresh-token or login again',
+        second_chance: true
+      });
     }
 
     // if token is valid
@@ -56,7 +59,7 @@ const authenticate_token_middleware = async (req, res, next) => {
         return res
           .status(401)
           .json({
-            msg: 'Token expired',
+            msg: 'Token expired, get a new access token at /api/v1/general/refresh-token or login again',
             second_chance: true
           });
       }

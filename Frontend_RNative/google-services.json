@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "692636193210",
+    "project_id": "diana-s-food-vendor-app",
+    "storage_bucket": "diana-s-food-vendor-app.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:692636193210:android:c7b22f1d3380e49d920d83",
+        "android_client_info": {
+          "package_name": "com.connectthedot.food_vendor_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBNNkkL0c61B6iJWZuqc9w6Wwu3QuwjTbk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

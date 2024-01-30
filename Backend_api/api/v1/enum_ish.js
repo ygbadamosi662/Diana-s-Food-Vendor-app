@@ -37,7 +37,6 @@ const Note_Status = {
   sent: 'SENT',
   received: 'RECEIVED',
   read: 'READ',
-  not_read: "Not Read" // used to get not read notifications
 };
 
 const Order_Status = {
@@ -66,6 +65,11 @@ const Transaction_Status = {
   failed: 'FAILED',
   dispute: 'DISPUTE',
   resolved: 'DISPUTE RESOLVED',
+};
+
+const Transaction_type = {
+  credit: 'CREDIT',
+  debit: 'DEBIT',
 };
 
 const Is_Verified = {
@@ -120,7 +124,12 @@ const Time_share = {
   week: 7 * 24 * 60 * 60 * 1000,
   month: 30 * 24 * 60 * 60 * 1000,
   year: 365 * 24 * 60 * 60 * 1000,
-}
+};
+
+const Time_Directory = {
+  future: 'future',
+  past: 'past',
+};
 
 const States = {
   lagos: 'Lagos',
@@ -129,7 +138,7 @@ const States = {
   ondo: 'Ondo',
 };
 
-const Countries = {
+const Country = {
   nigeria: 'Nigeria',
 };
 
@@ -138,6 +147,13 @@ const Events = {
   remove: 'REMOVE',
   overwrite: 'OVERWRITE',
   clear: 'CLEAR',
+};
+
+const userStatus = {
+  active: 'ACTIVE',
+  deactivated: 'DEACTIVATED',
+  banned: 'BANNED',
+  deleted: 'DELETED',
 };
 
 module.exports = { 
@@ -156,7 +172,10 @@ module.exports = {
   Where,
   Shipemnt_status,
   States,
-  Countries,
   Time_share,
+  Time_Directory,
   Events,
+  userStatus,
+  Country,
+  Transaction_type
 };

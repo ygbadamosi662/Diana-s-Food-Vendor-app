@@ -1,4 +1,3 @@
-const { Notification} = require('../repos/notification_repo');
 const { Note_Status } = require('../enum_ish');
 /**
  * Contains the NotificationService class
@@ -8,34 +7,81 @@ const { Note_Status } = require('../enum_ish');
 
 class NotificationService {
 
-  async notify(obj) {
-    // only for notifications
-    if (!obj.to || !obj.subject || !obj.comment) { return }
+  /**
+   * Asynchronously notifies a user with a given note.
+   *
+   * @param {Object} note - the note to be sent
+   * @param {Object} user - the user to be notified
+   * @return {Promise<Object>} the saved user object
+   */
+  async notify(note=null, user=null ) {
+    if(!note || !user) {
+      return null;
+    }
+
+    const { subject, comment } = note;
+
+    if (!subject || !comment) { return null; }
     try {
-      obj.status = Note_Status.sent;
-      return await Notification.create(obj);
+      note.status = Note_Status.sent;
+      user.notifications.push(note);
+      return await user.save();
     } catch (error) {
       throw error;
     }
   }
 
-  async notify_all(receivers, comment, subject) {
-    // only for notifications
-    if (!receivers || !comment || !subject) { return }
+  /**
+   * Batch notes to user.
+   *
+   * @param {Array} notes - the array of notes
+   * @param {Object} user - the user object
+   * @return {Promise} - the updated user object
+   */
+  async batch_notes_to_user(notes=[], user=null ) {
+    if(!notes || !user) {
+      return null;
+    }
     try {
-      const all = await Notification.insertMany(receivers.map((user) => {
-        return {
-          to: user,
-          subject: subject,
-          comment: comment,
-          status: Note_Status.sent,
-        };
-      }));
-      return all;
+      if(notes.length > 0) {
+        notes.map((note) => {
+          note.status = Note_Status.sent;
+          user.notifications.push(note);
+        })
+        await user.save();
+      }
     } catch (error) {
       throw error;
     }
   }
+
+  /**
+   * Asynchronously notifies all specified receivers with a comment and subject.
+   *
+   * @param {Array} receivers - An array of receiver objects.
+   * @param {string} comment - The comment to be sent.
+   * @param {string} subject - The subject of the notification.
+   * @return {Promise} A promise that resolves when all notifications have been sent.
+   */
+  async notify_all(receivers=null, comment=null, subject=null) {
+    if (!receivers || !comment || !subject) { return null; }
+    try {
+      let promises = [];
+      receivers.map((user) => {
+        user.notifications.push({
+          to: user,
+          subject: subject,
+          comment: comment,
+          status: Note_Status.sent,
+        });
+        promises.push(user.save());
+      });
+      return await Promise.all(promises);
+    } catch (error) {
+      throw error;
+    }
+  }
+  
 }
 
 

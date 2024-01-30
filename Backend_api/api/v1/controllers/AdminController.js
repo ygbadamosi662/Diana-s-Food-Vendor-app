@@ -1,11 +1,8 @@
 require('dotenv').config();
 const util = require('../util');
-const { page_info, User, Food, Review, Order, Transaction, Connection } = require('../models/engine/db_storage');
-const { user_repo } = require('../repos/user_repo');
-const { food_repo } = require('../repos/food_repo');
-const { review_repo } = require('../repos/review_repo');
+const { page_info, User, Food, Review, Order, Transaction, Connection, Shipment, Address } = require('../models/engine/db_storage');
 const { notification_service } = require('../services/notification_service');
-const { notification_repo } = require('../repos/notification_repo');
+const { food_schedule_service } = require('../services/food_schedule_service')
 const MongooseError = require('mongoose').Error;
 const { Types } = require('mongoose');
 const JsonWebTokenErro = require('jsonwebtoken').JsonWebTokenError;
@@ -25,6 +22,13 @@ const {
   Events,
   Order_type,
   Pre_order_Status,
+  userStatus,
+  Time_Directory,
+  Transaction_type,
+  Shipemnt_status,
+  States,
+  Country,
+  Where
  } = require('../enum_ish');
 /**
  * Contains the UserController class 
@@ -371,21 +375,30 @@ class AdminController {
 
   static async add_schedule_to_food(req, res) {
     try {
+      // schedule validation template
+      const schedule_template = {
+        for_when: Joi
+          .date()
+          .required(),
+        type: Joi
+          .string()
+          .valid(...Object.values(Schedule_type))
+          .required(),
+        hashtag: Joi
+          .string(),
+        total_qty: Joi
+          .number()
+          .required(),
+      };
+
       const schema = Joi.object({
         id: Joi
           .string()
           .required(),
         schedules: Joi
           .array()
-          .items(Joi.date())
-          .required(),
-        type: Joi
-          .array()
-          .items(Joi.string().valid(...Object.values(Schedule_type)))
-          .default([Schedule_type.one_off, Schedule_type.one_off, Schedule_type.one_off, Schedule_type.one_off]),
-        hashtag: Joi
-          .array()
-          .items(Joi.string()),
+          .items(Joi.object(schedule_template))
+          .required()
       });
 
       // validate body
@@ -395,57 +408,19 @@ class AdminController {
         throw error;
       }
 
-      let { type, hashtag } = value;
-      let schedules = [];
+      const { schedules, id } = value;
 
-      /**
-       * Validates the timing of each schedule in the given value.
-       *
-       * @return {boolean} Returns true if all schedules have a reasonable timing in the future, otherwise false.
-       */
-      const validate_timing = () => {
-        let index = 0;
-        return value.schedules.every((schedule) => {
-          let new_schedule =  {
-            for_when: schedule,
-            type: type[index],
-          };
-          let expiry_time = get_schedule_expiry(new_schedule);
-          const reasonable = (expiry_time.getTime() - Time_share.hour) > Date.now(); //this means time to set expiration of schedule and for users to have ample time to preorder have been set to 1hour b4 schedule expiration.
-
-          // collect schedule
-          if(!reasonable) {
-            return reasonable;
-          }
-          new_schedule.hashtag = hashtag ? `#${hashtag.toLocaleLowerCase()}` : null;
-          new_schedule.expiry_time = expiry_time;
-
-          schedules.push(new_schedule);
-
-          index++;
-          return reasonable;
-        });
-      };
-
-      //promised food
-      const food_pr = Food
-        .findById(value.id)
-        .select('schedules _id name');
-
-      // validate schedules
-      if(!validate_timing()) {
-        return res
-          .status(400)
-          .json({
-            msg: 'Invalid request, schedules must have a reasonable timing in the future',
-          });
-      }
-
-      // collect food
-      const food = await food_pr;
+      const { 
+        food_exists, 
+        food, 
+        hashtag_exists, 
+        schedule_exists, 
+        reasonable, 
+        msg
+      } = await food_schedule_service.validate_and_create_schedules(schedules, id);// this function updates the food document accordinly
     
       // validate food
-      if(!food) {
+      if(!food_exists) {
         return res
           .status(400)
           .json({
@@ -453,60 +428,38 @@ class AdminController {
           });
       }
 
-      // check if schedule already exists
-      let exists_msg = ""
-      const does_not_exists = food.schedules.every((host_schedule) => {
-        return schedules.every((schedule) => {
-          const exists = schedule.for_when === host_schedule.for_when
-          if(exists) {
-            exists_msg = `Oops, food already has schedule: ${schedule.for_when.toISOString()}`;
-            return false;
-          }
-          return true;
-        });
-      });
-
-      if(does_not_exists === false) {
+      // checks if scheduld time has a reasonable timing(in the future)
+      if(!reasonable) {
         return res
           .status(400)
           .json({
-            msg: exists_msg,
+            msg: `Invalid request, ${msg}`
           });
       }
 
-      let scheduled_flag = false;
-
-      // check if only one schedule is provided
-      if((scheduled_flag === false) && schedules.length === 1) {
-        food.schedules.push(schedules[0]);
-        scheduled_flag = true;
+      // check if schedule already exists
+      if(schedule_exists) {
+        return res
+          .status(400)
+          .json({
+            msg: `Invalid request, ${msg}`
+          });
       }
 
-      // check if more than one schedule is provided
-      if((scheduled_flag === false) && schedules.length > 1) {
-         // check if food has schedules
-        if((scheduled_flag === false) && food.schedules.length === 0) {
-          food.schedules = schedules;
-          scheduled_flag = true;
-        }
-
-        // if it has multiple schedules
-        if((scheduled_flag === false) && food.schedules.length > 0) {
-          food.schedules = [...food.schedules, ...schedules];
-          scheduled_flag = true;
-        }
+      // check if hashtag already exists
+      if(hashtag_exists) {
+        return res
+          .status(400)
+          .json({
+            msg: `Invalid request, ${msg}`
+          });
       }
-
-      // sort schedules in ascending order
-      scheduled_flag && food.schedules.sort((a, b) => a.for - b.for);
-
-      // save food
-      scheduled_flag && await food.save();
       
       return res
         .status(201)
         .json({
           msg: `schedules successfully added`,
+          food: food
         });
     } catch (error) {
       
@@ -563,6 +516,422 @@ class AdminController {
     }
   }
 
+  /**
+   * Retrieves food items based on the provided request and response objects.
+   *
+   * @param {Object} req - the request object
+   * @param {Object} res - the response object
+   * @return {Object} an object containing the retrieved food items and page information
+   */
+  static async get_foods(req, res) {
+    try {
+      const schema = Joi.object({
+        count: Joi
+          .boolean()
+          .default(false),
+        filter: Joi
+          .object({
+            name: Joi
+              .string(),
+            fave_count: Joi
+              .array()
+              .items(Joi.number().integer()),
+            types: Joi
+              .array()
+              .items(Joi.string().valid(...Object.values(Type))),
+            schedules: Joi
+              .object({
+                size_range: Joi
+                  .array()
+                  .items(Joi.number().integer().precision(2)),
+                for_when_range: Joi
+                  .object({
+                    range: Joi
+                      .object({
+                        dir: Joi
+                          .string()
+                          .valid(...Object.values(Time_Directory))
+                          .default(Time_Directory.future),
+                        time_share: Joi
+                          .string()
+                          .valid(...Object.keys(Time_share))
+                          .default(Object.keys(Time_share)[0]),
+                        times: Joi
+                          .number()
+                          .integer()
+                          .default(1),
+                      }),
+                    exact: Joi
+                      .date(),
+                  })
+                  .custom((value, helpers) => {
+                    const { exact, range } = value;
+                    if(Object.values(value).length === 0) {
+                      return helpers.error('Validation Error: no values found');
+                    }
+                    if(exact && range) {
+                      return helpers.error('Validation Error: You either set the exact field or set the range field, can\'t have it both ways');
+                    }
+                    return value;
+                  }),
+                expiry_time_range: Joi
+                  .object({
+                    range: Joi
+                      .object({
+                        dir: Joi
+                          .string()
+                          .valid(...Object.values(Time_Directory))
+                          .default(Time_Directory.future),
+                        time_share: Joi
+                          .string()
+                          .valid(...Object.keys(Time_share))
+                          .default(Object.keys(Time_share)[0]),
+                        times: Joi
+                          .number()
+                          .integer()
+                          .default(1),
+                      }),
+                    exact: Joi
+                      .date(),
+                  })
+                  .custom((value, helpers) => {
+                    const { exact, range } = value;
+                    if(Object.values(value).length === 0) {
+                      return helpers.error('Validation Error: no values found');
+                    }
+                    if(exact && range) {
+                      return helpers.error('Validation Error: You either set the exact field or set the range field, can\'t have it both ways');
+                    }
+                    return value;
+                  }),
+                orders: Joi
+                  .object({
+                    size_range: Joi
+                      .array()
+                      .items(Joi.number().integer().precision(2)),
+                    qty_range: Joi
+                      .array()
+                      .items(Joi.number().integer().precision(2)),
+                  }),
+                disputed_orders: Joi
+                  .object({
+                    size_range: Joi
+                      .array()
+                      .items(Joi.number().integer().precision(2)),
+                    qty_range: Joi
+                      .array()
+                      .items(Joi.number().integer().precision(2)),
+                  }),
+                available_qty_range: Joi
+                  .array()
+                  .items(Joi.number().integer()),
+                total_qty_range: Joi
+                  .array()
+                  .items(Joi.number().integer()),
+                type: Joi
+                  .string()
+                  .valid(...Object.values(Schedule_type))
+                  .default(Schedule_type.one_off),
+                hashtag: Joi
+                  .string(),
+                createdAt: Joi
+                  .object({
+                    range: Joi
+                      .object({
+                        time_share: Joi
+                          .string()
+                          .valid(...Object.keys(Time_share))
+                          .default(Object.keys(Time_share)[0]),
+                        times: Joi
+                          .number()
+                          .integer()
+                          .default(1),
+                      }),
+                    exact: Joi
+                      .date(),
+                  })
+                  .custom((value, helpers) => {
+                    if(Object.values(value).length === 0) {
+                      return helpers.error('Validation Error: no values found');
+                    }
+                    const { exact, range } = value;
+                    if(exact && range) {
+                      return helpers.error('Validation Error: You either set the exact field or set the range field, can\'t have it both ways');
+                    }
+                    return value;
+                  }),
+              }),
+            price_range: Joi
+              .array()
+              .items(Joi.number().integer().precision(2)),
+            qty_range: Joi
+              .array()
+              .items(Joi.number().integer()),
+            createdAt: Joi
+              .object({
+                range: Joi
+                  .object({
+                    time_share: Joi
+                      .string()
+                      .valid(...Object.keys(Time_share))
+                      .default(Object.keys(Time_share)[0]),
+                    times: Joi
+                      .number()
+                      .integer()
+                      .default(1),
+                  }),
+                exact: Joi
+                  .date(),
+              })
+              .custom((value, helpers) => {
+                if(Object.values(value).length === 0) {
+                  return helpers.error('Validation Error: no values found');
+                }
+                const { exact, range } = value;
+                if(exact && range) {
+                  return helpers.error('Validation Error: You either set the exact field or set the range field, can\'t have it both ways');
+                }
+                return value;
+              }),
+          }),
+        page: Joi
+          .number()
+          .integer()
+          .default(1),
+        size: Joi
+          .number()
+          .integer()
+          .default(20),
+      });
+
+      // validate body
+      const { value, error } = schema.validate(req.body);
+      
+      if (error) {
+        throw error;
+      }
+
+      const { filter, page, size, count } = value;
+
+      let query = {};
+      // if filter is set
+      if(filter) {
+        // building filter
+        const { name, fave_count, types, price_range, qty_range, schedules } = filter;
+
+        if(schedules) {
+          const {
+            size_range, 
+            for_when_range, 
+            expiry_time_range, 
+            available_qty_range, 
+            total_qty_range,
+            orders,
+            disputed_orders,
+            createdAt,
+            hashtag
+          } = schedules;
+
+          if(size_range) {
+            const q = util.range_query(size_range, res, 'schedules');
+            if(size_range.length === 1) {
+              query["schedules"] = q;
+            } else {
+              query.$expr = q;
+            }
+          }
+
+          if(for_when_range) {
+            const { exact, range } = for_when_range;
+            if(exact) {
+              query['schedules.for_when'] = exact;
+            }
+            if(range) {
+              const { times, time_share, dir } = range;
+              // between now and the stipulated time
+              query['schedules.for_when'] = util.date_query(Time_share[time_share], times, dir);
+            }
+          }
+
+          if(expiry_time_range) {
+            const { exact, range } = expiry_time_range;
+            if(exact) {
+              query['schedules.expiry_time'] = exact;
+            }
+            if(range) {
+              const { times, time_share, dir } = range;
+              // between now and the stipulated time
+              query['schedules.expiry_time'] = util.date_query(Time_share[time_share], times, dir);
+            }
+          }
+
+          if(available_qty_range) {
+            query["schedules.available_qty"] = util.range_query(available_qty_range, res);
+          }
+
+          if(total_qty_range) {
+            query["schedules.total_qty"] = util.range_query(total_qty_range, res);
+          }
+
+          if(hashtag) {
+            query["schedules.hashtag"] = hashtag;
+          }
+
+          if(orders) {
+            const { size_range, qty_range } = orders;
+            if(size_range) {
+              let setFlag = false
+              // query["schedules"] = { $size: util.range_query(size_range) };
+              if(size_range.length === 1) {
+                query["schedules.orders"] = util.range_query(size_range, res, 'orders');
+                setFlag = true;
+              }
+              if(setFlag == false ) {
+                const q = util.range_query(size_range, res, 'orders');
+                if(Array.isArray(q)) {
+                  query["schedules"] = { $expr: q[0] };
+                  query["schedules"] ={ $expr: q[1] };
+                }
+                else {
+                  query["schedules"] = { $expr: q };
+                }
+              }
+            }
+            if(qty_range) {
+              query["schedules.orders.qty"] = util.range_query(qty_range, res);
+            }
+          }
+
+          if(disputed_orders) {
+            const { size_range, qty_range } = disputed_orders;
+            if(size_range) {
+              let setFlag = false
+              // query["schedules"] = { $size: util.range_query(size_range) };
+              if(size_range.length === 1) {
+                query["schedules.disputed_orders"] = util.range_query(size_range, res, 'disputed_orders');
+                setFlag = true;
+              }
+              if(setFlag == false ) {
+                const q = util.range_query(size_range, res, 'disputed_orders');
+                if(Array.isArray(q)) {
+                  query["schedules"] = { $expr: q[0] };
+                  query["schedules"] ={ $expr: q[1] };
+                }
+                else {
+                  query["schedules"] = { $expr: q };
+                }
+              }
+            }
+            if(qty_range) {
+              query["schedules.disputed_orders.qty"] = util.range_query(qty_range, res);
+            }
+          }
+
+          if(createdAt) {
+            const { exact, range } = createdAt;
+            if(exact) {
+              query.createdAt = exact;
+            }
+            if(range) {
+              const { times, time_share } = range;
+              // between now and the stipulated time
+              query.createdAt = { 
+                $lte: new Date(), 
+                $gte: util.last_times(Time_share[time_share], times, Time_Directory.past)
+              };
+            }
+          }
+        }
+        
+        if(name) {
+          query.name = name;
+        }
+
+        if(price_range) {
+          query["price"] = util.range_query(price_range, res);
+        }
+
+        if(qty_range) {
+          query["qty"] = util.range_query(qty_range, res);
+        }
+
+        if(fave_count) {
+          query["fave_count"] = util.range_query(fave_count, res);
+        }
+
+        if(types) {
+          query.types = { $in: types };
+        }
+      }
+
+      // if count is true, consumer just wants a count of the filtered documents
+      if (count) {
+        const result = await Food
+          .countDocuments(query);
+
+        return res
+          .status(200)
+          .json({
+            count: result,
+          });
+      }
+
+      const { haveNextPage, currentPageExists, totalPages } = await page_info(query, Collections.Food, size, page);
+
+      let gather_data = [];
+
+      if(currentPageExists) {
+        const foods = await Food
+          .find(query)
+          .skip((page - 1) * size)
+          .limit(size)
+          .sort({ createdAt: -1 })
+          .exec(); //get foods
+
+        gather_data = [
+          foods,
+          haveNextPage, //have next page
+          totalPages, //total pages
+        ];
+      }
+
+      if(!currentPageExists) {
+        gather_data = [
+          [],
+          haveNextPage, //have next page
+          totalPages, //total pages
+        ];
+      }
+      
+      return res
+        .status(200)
+        .json({
+          foods: gather_data[0],
+          have_next_page: gather_data[1],
+          total_pages: gather_data[2],
+        });
+        
+    } catch (error) {
+      if (error instanceof MongooseError) {
+        console.log('We have a mongoose problem', error.message);
+        return res.status(500).json({msg: error.message});
+      }
+      if (error instanceof JsonWebTokenErro) {
+        console.log('We have a jwt problem', error.message);
+        return res.status(500).json({msg: error.message});
+      }
+      console.log(error);
+      return res.status(500).json({msg: error.message});
+    }
+  }
+
+  /**
+   * Retrieves users based on the provided filter criteria.
+   *
+   * @param {Object} req - The request object.
+   * @param {Object} res - The response object.
+   * @return {Promise} The promise that resolves to the response object.
+   */
   static async get_users(req, res) {
     try {
       const schema = Joi.object({
@@ -585,6 +954,38 @@ class AdminController {
             role: Joi
               .string()
               .valid(...Object.values(Role)),
+            status: Joi
+              .string()
+              .valid(...Object.values(userStatus)),
+            gender: Joi
+              .string()
+              .valid(...Object.values(Gender)),
+            createdAt: Joi
+              .object({
+                range: Joi
+                  .object({
+                    time_share: Joi
+                      .string()
+                      .valid(...Object.keys(Time_share))
+                      .default(Object.keys(Time_share)[0]),
+                    times: Joi
+                      .number()
+                      .integer()
+                      .default(1),
+                  }),
+                exact: Joi
+                  .date(),
+              })
+              .custom((value, helpers) => {
+                if(Object.values(value).length === 0) {
+                  return helpers.error('Validation Error: no values found');
+                }
+                const { exact, range } = value;
+                if(exact && range) {
+                  return helpers.error('Validation Error: You either set the exact field or set the range field, can\'t have it both ways');
+                }
+                return value;
+              }),
           }),
         page: Joi
           .number()
@@ -604,32 +1005,67 @@ class AdminController {
       }
 
       // building filter
-      let { filter } = value;
-      const { name } = filter;
-      if(name.fname) { filter['name.fname'] = name.fname }
-      if(name.lname) { filter['name.lname'] = name.lname }
-      if(name.aka) { filter['name.aka'] = name.aka }
-      delete filter.name;
+      const { filter } = value;
+      let query = {};
+      const { name, dob, role, createdAt, gender, status } = filter;
+
+      if(name) {
+        const { fname, lname, aka } = name;
+        if(fname) { query['name.fname'] = fname }
+        if(lname) { query['name.lname'] = lname }
+        if(aka) { query['name.aka'] = aka }
+
+      }
+
+      if(dob) {
+        query.dob = dob;
+      }
+
+      if(role) {
+        query.role = role;
+      }
+
+      if(status) {
+        query.status = status;
+      }
+
+      if(gender) {
+        query.gender = gender;
+      }
+
+      if(createdAt) {
+        const { exact, range } = createdAt;
+        if(exact) {
+          query.createdAt = exact;
+        }
+        if(range) {
+          const { times, time_share } = range;
+          // between now and the stipulated time
+          query.createdAt = { 
+            $lte: new Date(), 
+            $gte: util.last_times(Time_share[time_share], times, Time_Directory.past)
+          };
+        }
+      }
 
       // if count is true, consumer just wants a count of the filtered documents
       if (value.count) {
         const count = await User
-            .countDocuments(value.filter);
+            .countDocuments(query);
         return res
           .status(200)
           .json({
-            status: value.status,
             count: count,
           });
       }
 
-      const { haveNextPage, currentPageExists, totalPages } = await page_info(filter, Collections.User, value.size, value.page);
+      const { haveNextPage, currentPageExists, totalPages } = await page_info(query, Collections.User, value.size, value.page);
 
       let gather_data = [];
 
       if(currentPageExists) {
         const users = await User
-          .find(filter)
+          .find(query)
           .skip((value.page - 1) * value.size)
           .limit(value.size)
           .sort({ createdAt: -1 })
@@ -654,10 +1090,89 @@ class AdminController {
         .status(200)
         .json({
           users: gather_data[0],
-          have_next_page: gather_datas[1],
+          have_next_page: gather_data[1],
           total_pages: gather_data[1],
         });
         
+    } catch (error) {
+      if (error instanceof MongooseError) {
+        console.log('We have a mongoose problem', error.message);
+        return res.status(500).json({msg: error.message});
+      }
+      if (error instanceof JsonWebTokenErro) {
+        console.log('We have a jwt problem', error.message);
+        return res.status(500).json({msg: error.message});
+      }
+      console.log(error);
+      return res.status(500).json({msg: error.message});
+    }
+  }
+
+  /**
+   * Asynchronously disables a user account.
+   *
+   * @param {Object} req - the request object
+   * @param {Object} res - the response object
+   * @return {Object} response object with status and message
+   */
+  static async ban_account(req, res) {
+    try {
+      const schema = Joi.object({
+        password: Joi
+          .string()
+          .required()
+          .pattern(/^(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[!@#$%^&*()])[a-zA-Z0-9!@#$%^&*()]{8,}$/),
+        user_id: Joi
+          .string()
+          .required(),
+      });
+
+      // validate body
+      const { value, error } = schema.validate(req.body);
+      
+      if (error) {
+        throw error;
+      }
+
+      const { password, user_id } = value;
+
+      const [admin, user] = await Promise.all([
+        User.findById(req.user.id).exec(),
+        User.findById(user_id).exec()
+      ]);
+
+      const is_pwd = await util.validate_encryption(password, admin.password);
+      // validate admin password
+      if(is_pwd === false) {
+        return res
+          .status(400)
+          .json({ msg: 'Invalid Request, incorrect password'});
+      }
+
+      // validates user
+      if(!user) {
+        return res
+          .status(400)
+          .json({ msg: 'Invalid Request, user does not exist'});
+      }
+
+      // if user is already banned
+      if(user.status === userStatus.banned) {
+        return res
+          .status(400)
+          .json({ msg: 'Invalid Request, user already banned'});
+      }
+
+      // ban
+      user.status = userStatus.banned;
+      // reset refresh token
+      user.refresh_token = '';
+      // save
+      await user.save();
+
+      return res
+        .status(200)
+        .json({ msg: 'User banned successfully'});
     } catch (error) {
       if (error instanceof MongooseError) {
         console.log('We have a mongoose problem', error.message);
@@ -684,18 +1199,19 @@ class AdminController {
           .default(false),
         filter: Joi
           .object({
-            user: Joi
+            user_id: Joi
               .string(),
             type: Joi
               .string()
-              .valid(...Object.values(Order_type))
-              .default(Order_type.pickup),
+              .valid(...Object.values(Order_type)),
             pre_orders: Joi
               .object({
+                size_range: Joi
+                  .array()
+                  .items(Joi.number().integer().precision(2)),
                 type: Joi
                   .string()
-                  .valid(...Object.values(Order_type))
-                  .default(Order_type.pickup),
+                  .valid(...Object.values(Order_type)),
                 status: Joi
                   .string()
                   .valid(...Object.values(Pre_order_Status))
@@ -711,7 +1227,10 @@ class AdminController {
                   .items(Joi.number().integer()),
                 order_content: Joi
                   .object({
-                    food: Joi
+                    size_range: Joi
+                      .array()
+                      .items(Joi.number().integer().precision(2)),
+                    food_id: Joi
                       .string(),
                     qty_range: Joi
                       .array()
@@ -722,20 +1241,64 @@ class AdminController {
                   }),
                 pickup_time_range: Joi
                   .object({
-                    time_share: Joi
-                      .string()
-                      .valid(...Object.values(Time_share))
-                      .default(Time_share.day),
-                    times: Joi
-                      .number()
-                      .integer()
-                      .default(1),
+                    range: Joi
+                      .object({
+                        dir: Joi
+                          .string()
+                          .valid(...Object.values(Time_Directory))
+                          .default(Time_Directory.future),
+                        time_share: Joi
+                          .string()
+                          .valid(...Object.keys(Time_share))
+                          .default(Object.keys(Time_share)[0]),
+                        times: Joi
+                          .number()
+                          .integer()
+                          .default(1),
+                      }),
+                    exact: Joi
+                      .date(),
                   })
+                  .custom((value, helpers) => {
+                    const { exact, range } = value;
+                    if(Object.values(value).length === 0) {
+                      return helpers.error('Validation Error: no values found');
+                    }
+                    if(exact && range) {
+                      return helpers.error('Validation Error: You either set the exact field or set the range field, can\'t have it both ways');
+                    }
+                    return value;
+                  }),
+                createdAt: Joi
+                  .object({
+                    range: Joi
+                      .object({
+                        time_share: Joi
+                          .string()
+                          .valid(...Object.keys(Time_share))
+                          .default(Object.keys(Time_share)[0]),
+                        times: Joi
+                          .number()
+                          .integer()
+                          .default(1),
+                      }),
+                    exact: Joi
+                      .date(),
+                  })
+                  .custom((value, helpers) => {
+                    if(Object.values(value).length === 0) {
+                      return helpers.error('Validation Error: no values found');
+                    }
+                    const { exact, range } = value;
+                    if(exact && range) {
+                      return helpers.error('Validation Error: You either set the exact field or set the range field, can\'t have it both ways');
+                    }
+                    return value;
+                  }),
               }),
             status: Joi
               .string()
-              .valid(...Object.values(Order_Status))
-              .default(Order_Status.in_cart),
+              .valid(...Object.values(Order_Status)),
             total_range: Joi
               .array()
               .items(Joi.number().integer().precision(2)),
@@ -747,7 +1310,10 @@ class AdminController {
               .items(Joi.number().integer()),
             order_content: Joi
               .object({
-                food: Joi
+                size_range: Joi
+                  .array()
+                  .items(Joi.number().integer().precision(2)),
+                food_id: Joi
                   .string(),
                 qty_range: Joi
                   .array()
@@ -758,15 +1324,60 @@ class AdminController {
               }),
             pickup_time_range: Joi
               .object({
-                time_share: Joi
-                  .string()
-                  .valid(...Object.values(Time_share))
-                  .default(Time_share.day),
-                times: Joi
-                  .number()
-                  .integer()
-                  .default(1),
+                range: Joi
+                  .object({
+                    dir: Joi
+                      .string()
+                      .valid(...Object.values(Time_Directory))
+                      .default(Time_Directory.future),
+                    time_share: Joi
+                      .string()
+                      .valid(...Object.keys(Time_share))
+                      .default(Object.keys(Time_share)[0]),
+                    times: Joi
+                      .number()
+                      .integer()
+                      .default(1),
+                  }),
+                exact: Joi
+                  .date(),
               })
+              .custom((value, helpers) => {
+                const { exact, range } = value;
+                if(Object.values(value).length === 0) {
+                  return helpers.error('Validation Error: no values found');
+                }
+                if(exact && range) {
+                  return helpers.error('Validation Error: You either set the exact field or set the range field, can\'t have it both ways');
+                }
+                return value;
+              }),
+            createdAt: Joi
+              .object({
+                range: Joi
+                  .object({
+                    time_share: Joi
+                      .string()
+                      .valid(...Object.keys(Time_share))
+                      .default(Object.keys(Time_share)[0]),
+                    times: Joi
+                      .number()
+                      .integer()
+                      .default(1),
+                  }),
+                exact: Joi
+                  .date(),
+              })
+              .custom((value, helpers) => {
+                if(Object.values(value).length === 0) {
+                  return helpers.error('Validation Error: no values found');
+                }
+                const { exact, range } = value;
+                if(exact && range) {
+                  return helpers.error('Validation Error: You either set the exact field or set the range field, can\'t have it both ways');
+                }
+                return value;
+              }),
           }),
         page: Joi
           .number()
@@ -787,30 +1398,12 @@ class AdminController {
 
       const { count, pre_order, filter, page, size } = value;
 
-      // steal some seconds if value.query.user is set and validate user
-      let a_user_wish = null;
-      if(filter?.user) {
-        const exists = await User.exists({_Id: Types.ObjectId(filter.user)});
-        if(!exists) {
-          return res
-            .status(400)
-            .json({
-              message: 'Bad request, User does not exist',
-            })
-        }
-        // make a wish
-        a_user_wish = User
-          .findById()
-          .select('_id')
-          .exec(); //get user
-      }
-
       let query = {};
-      // if query is set
+      // if filter is set
       if(filter) {
-        // building filter
+        // build query
         const {
-          user, 
+          user_id, 
           type, 
           status, 
           total_range, 
@@ -818,28 +1411,33 @@ class AdminController {
           pickup_time_range, 
           order_total_range, 
           order_content,
+          createdAt,
           pre_orders
-         } = filter;
+        } = filter;
+
+        if(user_id) {
+          query.user = Types.ObjectId(user_id);
+        }
 
         if(order_content) {
-          if(order_content.paid_price_range) {
-            order_content.paid_price = util.sort_array_filter(order_content.paid_price_range, res);
+          const { paid_price_range, qty_range, food_id, size_range } = order_content;
+          if(paid_price_range) {
+            query["order_content.paid_price"] = util.range_query(paid_price_range, res);
           }
-          if(order_content.qty_range) {
-            order_content.qty = util.sort_array_filter(order_content.qty_range, res);
+          if(qty_range) {
+            query["order_content.qty"] = util.range_query(qty_range, res);
           }
-          if(order_content.food_query) {
-            if(order_content.food_query.types) {
-              order_content.food.types = { $in:  order_content.food_query.types};
-            }
-            if(order_content.food_query.name) {
-              order_content.food.name = order_content.food_query.name;
-            }
-            if(order_content.food_query.fave_count) {
-              order_content.food.fave_count = util.sort_array_filter(order_content.food_query.fave_count, res);
+          if(food_id) {
+            query["order_content.food"] = Types.ObjectId(food_id);
+          }
+          if(size_range) {
+            const q = util.range_query(size_range, res, "order_content");
+            if(size_range.length === 1) {
+              query["order_content"] = q;
+            } else {
+              query.$expr = q;
             }
           }
-          query.order_content = { $elemMatch: order_content };
         }
 
         if(pre_orders) {
@@ -851,79 +1449,124 @@ class AdminController {
             pickup_time_range, 
             order_total_range, 
             order_content,
-           } = pre_orders;
+            size_range
+          } = pre_orders;
 
-           let pre_orders_query = {};
+          if(size_range) {
+            const q = util.range_query(size_range, res, "pre_orders");
+            if(size_range.length === 1) {
+              query["pre_orders"] = q;
+            } else {
+              query.$expr = q;
+            }
+          }
 
           if(pre_orders.order_content) {
-            let order_content_query = {};
             if(order_content.paid_price_range) {
-              order_content_query.paid_price = util.sort_array_filter(order_content.paid_price_range, res);
+              query["pre_orders.order_content.paid_price"] = util.range_query(order_content.paid_price_range, res);
             }
             if(order_content.qty_range) {
-              order_content_query.qty = util.sort_array_filter(order_content.qty_range, res);
+              query["pre_orders.order_content.qty"] = util.range_query(order_content.qty_range, res);
             }
-            if(order_content.food_query) {
-              order_content_query.food = {};
-              if(order_content.food_query.types) {
-                order_content_query.food.types = { $in:  order_content.food_query.types};
-              }
-              if(order_content.food_query.name) {
-                order_content_query.food.name = order_content.food_query.name;
-              }
-              if(order_content.food_query.fave_count) {
-                order_content_query.food.fave_count = util.sort_array_filter(order_content.food_query.fave_count, res);
+            if(order_content.food_id) {
+              query["pre_orders.order_content.food"] = Types.ObjectId(order_content.food_id);
+            }
+            if(order_content.size_range) {
+              const q = util.range_query(order_content.size_range, res, "pre_orders.order_content");
+              if(size_range.length === 1) {
+                query["pre_orders.order_content"] = q;
+              } else {
+                query.$expr = q;
               }
             }
-            pre_orders_query.order_content = { $elemMatch: order_content_query };
           }
 
-          if(total_range) {
-            pre_orders_query.total = util.sort_array_filter(total_range, res);
+          if(pre_orders.total_range) {
+            query["pre_orders.total"] = util.range_query(total_range, res);
           }
   
-          if(order_total_range) {
-            pre_orders_query.order_total = util.sort_array_filter(order_total_range, res);
+          if(pre_orders.order_total_range) {
+            query["pre_orders.order_total"] = util.range_query(order_total_range, res);
           }
   
-          if(qty_range) {
-            pre_orders_query.total_qty = util.sort_array_filter(qty_range, res);
+          if(pre_orders.qty_range) {
+            query["pre_orders.total_qty"] = util.range_query(qty_range, res);
           }
   
           if(pickup_time_range) {
-            const now = new Date();
-            const minus_time = pickup_time_range.time_share * pickup_time_range.times;
-            const time = new Date(now.getTime() - minus_time);
-            pre_orders_query.ready_time = { $gte: time };
+            const { exact, range } = pickup_time_range;
+            if(exact) {
+              query.pickup_time = exact;
+            }
+            if(range) {
+              const { times, time_share, dir } = range;
+              // between now and the stipulated time
+              query['pre_orders.pickup_time'] = util.date_query(Time_share[time_share], times, dir);
+            }
+          }
+    
+          if(createdAt) {
+            const { exact, range } = createdAt;
+            if(exact) {
+              query.createdAt = exact;
+            }
+            if(range) {
+              const { times, time_share } = range;
+              // between now and the stipulated time
+              query['pre_orders.createdAt'] = { 
+                $lte: new Date(), 
+                $gte: util.last_times(Time_share[time_share], times, Time_Directory.past)
+              };
+            }
           }
   
           if(type) {
-            pre_orders_query.type = type;
+            query["pre_orders.type"] = type;
           }
   
           if(status) {
-            pre_orders_query.status = status;
+            query["pre_orders.status"] = status;
           }
-          query.pre_orders = { $elemMatch: pre_orders_query };
         }
 
         if(total_range) {
-          query.total = util.sort_array_filter(total_range, res);
+          query["total"] = util.range_query(total_range, res);
         }
 
         if(order_total_range) {
-          query.order_total = util.sort_array_filter(order_total_range, res);
+          query["order_total"] = util.range_query(order_total_range, res);
         }
 
         if(qty_range) {
-          query.total_qty = { $gte: qty_range[0], $lte: qty_range[1] };
+          query["total_qty"] = util.range_query(qty_range, res);
         }
 
         if(pickup_time_range) {
-          const now = new Date();
-          const minus_time = pickup_time_range.time_share * pickup_time_range.times;
-          const time = new Date(now.getTime() - minus_time);
-          query.pickup_time = { $gte: time };
+          const { exact, range } = pickup_time_range;
+          if(exact) {
+            query.pickup_time = exact;
+          }
+          if(range) {
+            const { times, time_share, dir } = range;
+            // between now and the stipulated time
+            query.pickup_time = util.date_query(Time_share[time_share], times, dir);
+          }
+        }
+  
+        if(createdAt) {
+          const { exact, range } = createdAt;
+          if(exact) {
+            query.createdAt = exact;
+          }
+          if(range) {
+            const { times, time_share } = range;
+            // between now and the stipulated time
+            const now = new Date();
+            query.createdAt = { 
+              $lte: now, 
+              $gte: util.last_times(Time_share[time_share], times, Time_Directory.past)
+            };
+          }
         }
 
         if(type) {
@@ -933,13 +1576,9 @@ class AdminController {
         if(status) {
           query.status = status;
         }
-
-        if(user) {
-          //wish granted, you are welcome.
-          query.user = await a_user_wish;
-        }
       }
 
+      console.log(query)
       // if count is true, consumer just wants a count of the filtered documents
       if (count) {
         const result = await Order
@@ -1078,17 +1717,231 @@ class AdminController {
         count: Joi
           .boolean()
           .default(false),
+        filter: Joi.object({
+          food_id: Joi
+            .string(),
+          user_id: Joi
+            .string(),
+          stars: Joi
+            .array()
+            .items(Joi.number().integer()),
+          comment: Joi
+            .string(),
+          createdAt: Joi
+            .object({
+              range: Joi
+                .object({
+                  time_share: Joi
+                    .string()
+                    .valid(...Object.keys(Time_share))
+                    .default(Object.keys(Time_share)[0]),
+                  times: Joi
+                    .number()
+                    .integer()
+                    .default(1),
+                }),
+              exact: Joi
+                .date(),
+            })
+            .custom((value, helpers) => {
+              if(Object.values(value).length === 0) {
+                return helpers.error('Validation Error: no values found');
+              }
+              const { exact, range } = value;
+              if(exact && range) {
+                return helpers.error('Validation Error: You either set the exact field or set the range field, can\'t have it both ways');
+              }
+              return value;
+            }),
+          }),
+        page: Joi
+          .number()
+          .integer()
+          .default(1),
+        size: Joi
+          .number()
+          .integer()
+          .default(20),
+      });
+
+      // validate body
+      const { value, error } = schema.validate(req.body);
+      if (error) {
+        throw error;
+      }
+
+      let query = {};
+      const { filter, page, size, count } = value;
+      // if filter is set
+      if(filter) {
+        const { food_id, user_id, stars, comment, createdAt } = filter;
+        // build query
+        if(food_id) {
+          query.food = new Types.ObjectId(food_id);
+        }
+
+        if(user_id) {
+          query.user = new Types.ObjectId(user_id);
+        }
+
+        if(comment) {
+          filter.comment = comment;
+        }
+
+        if(stars) {
+          query["stars"] = util.range_query(stars, res);
+        }
+
+        if(createdAt) {
+          const { exact, range } = createdAt;
+          if(exact) {
+            query.createdAt = exact;
+          }
+          if(range) {
+            const { times, time_share } = range;
+            // between now and the stipulated time
+            query.createdAt = { 
+              $lte: new Date(), 
+              $gte: util.last_times(Time_share[time_share], times, Time_Directory.past)
+            };
+          }
+        }
+      }
+
+      // if count is true, consumer just wants a count of the filtered documents
+      if (count) {
+        const count = await Review.countDocuments(filter);
+
+        return res
+            .status(200)
+            .json({
+              count: count,
+            });
+      }
+
+      const { 
+        haveNextPage, 
+        currentPageExists, 
+        totalPages
+      } = await page_info(query, Collections.Review, size, page);
+
+      let gather_data = [];
+
+      if(currentPageExists) {
+        const reviews = await Review
+          .find(query)
+          .skip((page - 1) * size)
+          .limit(size)
+          .sort({ createdAt: -1 })
+          .exec(); //get reviews
+
+        gather_data = [
+          reviews,
+          haveNextPage, //have next page
+          totalPages, //total pages
+        ];
+      }
+
+      if(!currentPageExists) {
+        gather_data = [
+          [],
+          haveNextPage, //have next page
+          totalPages, //total pages
+        ];
+      }
+
+
+      return res
+        .status(200)
+        .json({
+          reviews: gather_data[0],
+          have_next_page: gather_data[1],
+          total_pages: gather_data[2],
+        });
+    } catch (error) {
+      
+      if (error instanceof MongooseError) {
+        console.log('We have a mongoose problem', error.message);
+        return res.status(500).json({msg: error.message});
+      }
+      if (error instanceof JsonWebTokenErro) {
+        console.log('We have a jwt problem', error.message);
+        return res.status(500).json({msg: error.message});
+      }
+      console.log(error);
+      return res.status(500).json({msg: error.message});
+    }
+  }
+
+  static async get_transactions(req, res) {
+    try {
+      const schema = Joi.object({
+        count: Joi
+          .boolean()
+          .default(false),
         filter: Joi
           .object({
-            comment: Joi
-              .string(),
-            stars: Joi
-              .array()
-              .items(Joi.number().integer()),
-            food_id: Joi
+            order_id: Joi
               .string(),
             user_id: Joi
+              .string(),
+            pre_order_id: Joi
+              .string(),
+            type: Joi
               .string()
+              .valid(...Object.values(Transaction_type))
+              .default(Transaction_type.credit),
+            status: Joi
+              .string()
+              .valid(...Object.values(Transaction_Status))
+              .default(Transaction_Status.successful),
+            amount_range: Joi
+              .array()
+              .items(Joi.number().integer().precision(2)),
+            credit_account: Joi
+              .object({
+                bank_name: Joi
+                  .string(),
+                account_name: Joi
+                  .string(),
+                account_number: Joi
+                  .string(),
+              }),
+            debit_account: Joi
+              .object({
+                bank_name: Joi
+                  .string(),
+                account_name: Joi
+                  .string(),
+                account_number: Joi
+                  .string(),
+              }),
+            createdAt: Joi
+              .object({
+                range: Joi
+                  .object({
+                    time_share: Joi
+                      .string()
+                      .valid(...Object.keys(Time_share))
+                      .default(Object.keys(Time_share)[0]),
+                    times: Joi
+                      .number()
+                      .integer()
+                      .default(1),
+                  }),
+                exact: Joi
+                  .date(),
+              })
+              .custom((value, helpers) => {
+                if(Object.values(value).length === 0) {
+                  return helpers.error('Validation Error: no values found');
+                }
+                const { exact, range } = value;
+                if(exact && range) {
+                  return helpers.error('Validation Error: You either set the exact field or set the range field, can\'t have it both ways');
+                }
+                return value;
+              }),
           }),
         page: Joi
           .number()
@@ -1107,84 +1960,99 @@ class AdminController {
         throw error;
       }
 
-      let filter = {};
-      // if value.filter is set
-      if(value.filter) {
+      const { filter, page, size } = value;
+
+      let query = {};
+      // if filter is set
+      if(filter) {
         // building filter
-        filter = value.filter;
-        // if user or food is set
-        if(value.filter.user || value.filter.recipe) {
-          if (value.filter.user && value.filter.recipe) {
-            let donezo = [];
-            await Connection.transaction(async () => {
-              let gather_task = [
-                User.findById(value.filter.user_id),
-                Food.findById(value.filter.food_id)
-              ];
-              donezo = await Promise.all(gather_task);
-            });
+        const { 
+          order_id, 
+          user_id, 
+          pre_order_id, 
+          type, 
+          status, 
+          amount_range, 
+          debit_account, 
+          credit_account,
+          createdAt
+        } = filter;
 
-            // food or user does not exist
-            if(!donezo[0] || !donezo[1]) {
-              let who = [];
-              if(!donezo[0]) {
-                who.push('User');
-              }
-              if(!donezo[1]) {
-                who.push('Food');
-              }
+        if(order_id) {
+          query.order = new Types.ObjectId(order_id);
+        }
 
-              return res
-                .status(400)
-                .json({
-                  msg: `Bad Request, ${who.length == 2 ? who.join(',') : who[0]} does not exist`,
-                });
-            }
+        if(user_id) {
+          query.user = new Types.ObjectId(user_id);
+        }
 
-            filter.user = donezo[0];
-            filter.food = donezo[1];
+        if(pre_order_id) {
+          query.pre_order = new Types.ObjectId(order_id);
+        }
+
+        if(amount_range) {
+          query["amount"] = util.range_query(amount_range);
+        }
+
+        if(type) {
+          query['type'] = type;
+        }
+
+        if(status) {
+          query['status'] = status;
+        }
+
+        if(credit_account) {
+          const { bank_name, account_name, account_number} = credit_account;
+          if(bank_name) {
+            query['credit_account.bank_name'] = bank_name;
           }
 
-          if(value.filter.user_id) {
-            const user = await User.findById(value.filter.user_id);
-            if(!user) {
-              return res
-                .status(400)
-                .json({
-                  msg: 'Bad request, User does not exist',
-                });
-            }
-            filter.user = user;
+          if(account_name) {
+            query['credit_account.account_name'] = account_name;
           }
 
-          if(value.filter.food_id) {
-            const food = await Food.findById(value.filter.food_id);
-            if(!food) {
-              return res
-                .status(400)
-                .json({
-                  msg: 'Bad request, Food does not exist',
-                });
-            }
-            filter.food = food;
+          if(account_number) {
+            query['credit_account.account_number'] = account_number;
           }
         }
 
-        const { comment, stars } = filter;
+        if(debit_account) {
+          const { bank_name, account_name, account_number} = debit_account;
+          if(bank_name) {
+            query['debit_account.bank_name'] = bank_name;
+          }
 
-        if(comment) {
-          filter.comment = new RegExp(comment);
+          if(account_name) {
+            query['debit_account.account_name'] = account_name;
+          }
+
+          if(account_number) {
+            query['debit_account.account_number'] = account_number;
+          }
+
         }
-
-        if(stars) {
-          filter.stars = util.sort_array_filter(stars);
+    
+        if(createdAt) {
+          const { exact, range } = createdAt;
+          if(exact) {
+            query.createdAt = exact;
+          }
+          if(range) {
+            const { times, time_share } = range;
+            // between now and the stipulated time
+            query.createdAt = { 
+              $lte: new Date(), 
+              $gte: util.last_times(Time_share[time_share], times, Time_Directory.past)
+            };
+          }
+        }
       }
-    }
 
       // if count is true, consumer just wants a count of the filtered documents
       if (value.count) {
-        const count = await Review
-          .countDocuments(filter);
+        const count = await Transaction
+          .countDocuments(query);
 
         return res
           .status(200)
@@ -1192,26 +2060,44 @@ class AdminController {
             count: count,
           });
       }
-      
-      const gather_data_task = Promise.all([
-        Review
-          .find(filter)
-          .skip((value.page - 1) * value.size)
-          .limit(value.size)
-          .populate('user')
-          .sort({ createdAt: -1 })
-          .exec(), //get recipes
-        review_repo.has_next_page(filter, value.page, value.size), //if there is a next page
-        review_repo.total_pages(filter, value.size), //get total pages
-      ]);
 
-      const done = await gather_data_task;
+      const { 
+        haveNextPage, 
+        currentPageExists, 
+        totalPages
+      } = await page_info(query, Collections.Transaction, size, page);
+
+      let gather_data = [];
+
+      if(currentPageExists) {
+        const transactions = await Transaction
+          .find(query)
+          .skip((page - 1) * size)
+          .limit(size)
+          .sort({ createdAt: -1 })
+          .exec(); //get transactions
+
+        gather_data = [
+          transactions,
+          haveNextPage, //have next page
+          totalPages, //total pages
+        ];
+      }
+
+      if(!currentPageExists) {
+        gather_data = [
+          [],
+          haveNextPage, //have next page
+          totalPages, //total pages
+        ];
+      }
+      
       return res
         .status(200)
         .json({
-          reviews: done[0],
-          have_next_page: done[1],
-          total_pages: done[2],
+          transactions: gather_data[0],
+          have_next_page: gather_data[1],
+          total_pages: gather_data[2],
         });
         
     } catch (error) {
@@ -1228,24 +2114,115 @@ class AdminController {
     }
   }
 
-  static async get_notifications(req, res) {
+  static async get_shipments(req, res) {
     try {
       const schema = Joi.object({
         count: Joi
           .boolean()
-          .required(),
+          .default(false),
         filter: Joi
           .object({
-            comment: Joi
+            order_id: Joi
               .string(),
-            createdAt: Joi // in hours
-              .number()
-              .precision(1),
-            to: Joi
+            user_id: Joi
+              .string(),
+            pre_order_id: Joi
+              .string(),
+            address_id: Joi
               .string(),
             status: Joi
               .string()
-              .valid(...Object.values(Status))
+              .valid(...Object.values(Shipemnt_status))
+              .default(Shipemnt_status.delivered),
+            fee_range: Joi
+              .array()
+              .items(Joi.number().integer().precision(2)),
+            estimated_delivery_time_range: Joi
+              .object({
+                range: Joi
+                  .object({
+                    dir: Joi
+                      .string()
+                      .valid(...Object.values(Time_Directory))
+                      .default(Time_Directory.future),
+                    time_share: Joi
+                      .string()
+                      .valid(...Object.keys(Time_share))
+                      .default(Object.keys(Time_share)[0]),
+                    times: Joi
+                      .number()
+                      .integer()
+                      .default(1),
+                  }),
+                exact: Joi
+                  .date(),
+              })
+              .custom((value, helpers) => {
+                const { exact, range } = value;
+                if(Object.values(value).length === 0) {
+                  return helpers.error('Validation Error: no values found');
+                }
+                if(exact && range) {
+                  return helpers.error('Validation Error: You either set the exact field or set the range field, can\'t have it both ways');
+                }
+                return value;
+              }),
+            delivery_time_range: Joi
+              .object({
+                range: Joi
+                  .object({
+                    dir: Joi
+                      .string()
+                      .valid(...Object.values(Time_Directory))
+                      .default(Time_Directory.future),
+                    time_share: Joi
+                      .string()
+                      .valid(...Object.keys(Time_share))
+                      .default(Object.keys(Time_share)[0]),
+                    times: Joi
+                      .number()
+                      .integer()
+                      .default(1),
+                  }),
+                exact: Joi
+                  .date(),
+              })
+              .custom((value, helpers) => {
+                const { exact, range } = value;
+                if(Object.values(value).length === 0) {
+                  return helpers.error('Validation Error: no values found');
+                }
+                if(exact && range) {
+                  return helpers.error('Validation Error: You either set the exact field or set the range field, can\'t have it both ways');
+                }
+                return value;
+              }),
+            createdAt: Joi
+              .object({
+                range: Joi
+                  .object({
+                    time_share: Joi
+                      .string()
+                      .valid(...Object.keys(Time_share))
+                      .default(Object.keys(Time_share)[0]),
+                    times: Joi
+                      .number()
+                      .integer()
+                      .default(1),
+                  }),
+                exact: Joi
+                  .date(),
+              })
+              .custom((value, helpers) => {
+                if(Object.values(value).length === 0) {
+                  return helpers.error('Validation Error: no values found');
+                }
+                const { exact, range } = value;
+                if(exact && range) {
+                  return helpers.error('Validation Error: You either set the exact field or set the range field, can\'t have it both ways');
+                }
+                return value;
+              }),
           }),
         page: Joi
           .number()
@@ -1264,36 +2241,92 @@ class AdminController {
         throw error;
       }
 
-      let filter = {};
-      // if value.filter is set
-      if(value.filter) {
+      const { filter, page, size } = value;
+
+      let query = {};
+      // if filter is set
+      if(filter) {
         // building filter
-        filter = value.filter;
-        // if user or recipe is set
-        if(value.filter.to) {
-          const user = await User.findById(value.filter.to);
-          if(!user) {
-            return res
-              .status(400)
-              .json({
-                message: 'Bad request, User does not exist',
-              });
-          }
-          filter.to = user;
+        const { 
+          order_id, 
+          user_id,
+          address_id, 
+          pre_order_id, 
+          status,
+          fee_range,
+          estimated_delivery_time_range,
+          delivery_time_range,
+          createdAt
+        } = filter;
+
+        if(order_id) {
+          query.order = new Types.ObjectId(order_id);
         }
 
-        const { createdAt } = filter;
+        if(user_id) {
+          query.user = new Types.ObjectId(user_id);
+        }
+
+        if(address_id) {
+          query.address = new Types.ObjectId(address_id);
+        }
+
+        if(pre_order_id) {
+          query.pre_order = new Types.ObjectId(order_id);
+        }
+
+        if(fee_range) {
+          query["amount"] = util.range_query(fee_range);
+        }
+
+        if(status) {
+          query['status'] = status;
+        }
+
+        if(estimated_delivery_time_range) {
+          const { exact, range } = estimated_delivery_time_range;
+          if(exact) {
+            query.estimated_delivery_time = exact;
+          }
+          if(range) {
+            const { times, time_share, dir } = range;
+            // between now and the stipulated time
+            query.estimated_delivery_time = util.date_query(Time_share[time_share], times, dir);
+          }
+        }
+
+        if(delivery_time_range) {
+          const { exact, range } = delivery_time_range;
+          if(exact) {
+            query.delivery_time = exact;
+          }
+          if(range) {
+            const { times, time_share, dir } = range;
+            // between now and the stipulated time
+            query.delivery_time = util.date_query(Time_share[time_share], times, dir);
+          }
+        }
+    
         if(createdAt) {
-          const now = new Date();
-          const x_ago = new Date(now.getTime() - (createdAt * 60 * 60 * 1000));
-          filter.createdAt = { $gte: x_ago};
+          const { exact, range } = createdAt;
+          if(exact) {
+            query.createdAt = exact;
+          }
+          if(range) {
+            const { times, time_share } = range;
+            // between now and the stipulated time
+            query.createdAt = { 
+              $lte: new Date(), 
+              $gte: util.last_times(Time_share[time_share], times, Time_Directory.past)
+            };
+          }
         }
       }
 
       // if count is true, consumer just wants a count of the filtered documents
       if (value.count) {
-        const count = await Notification
-          .countDocuments(filter);
+        const count = await Shipment
+          .countDocuments(query);
 
         return res
           .status(200)
@@ -1301,72 +2334,231 @@ class AdminController {
             count: count,
           });
       }
-      
-      const gather_data_task = Promise.all([
-        Notification
-          .find(filter)
-          .skip((value.page - 1) * value.size)
-          .limit(value.size)
-          .sort({ createdAt: -1 })
-          .exec(), //get recipes
-        notification_repo.has_next_page(filter, value.page, value.size), //if there is a next page
-        notification_repo.total_pages(filter, value.size), //get total pages
-      ]);
 
-      const done = await gather_data_task;
+      const { 
+        haveNextPage, 
+        currentPageExists, 
+        totalPages
+      } = await page_info(query, Collections.Shipment, size, page);
+
+      let gather_data = [];
+
+      if(currentPageExists) {
+        const shipments = await Shipment
+          .find(query)
+          .skip((page - 1) * size)
+          .limit(size)
+          .sort({ createdAt: -1 })
+          .exec(); //get shipments
+
+        gather_data = [
+          shipments,
+          haveNextPage, //have next page
+          totalPages, //total pages
+        ];
+      }
+
+      if(!currentPageExists) {
+        gather_data = [
+          [],
+          haveNextPage, //have next page
+          totalPages, //total pages
+        ];
+      }
+      
       return res
         .status(200)
         .json({
-          notifications: done[0],
-          have_next_page: done[1],
-          total_pages: done[2],
+          shipments: gather_data[0],
+          have_next_page: gather_data[1],
+          total_pages: gather_data[2],
         });
         
     } catch (error) {
       if (error instanceof MongooseError) {
         console.log('We have a mongoose problem', error.message);
-        return res.status(500).json({error: error.message});
+        return res.status(500).json({msg: error.message});
       }
       if (error instanceof JsonWebTokenErro) {
         console.log('We have a jwt problem', error.message);
-        return res.status(500).json({error: error.message});
+        return res.status(500).json({msg: error.message});
       }
       console.log(error);
-      return res.status(500).json({error: error.message});
+      return res.status(500).json({msg: error.message});
     }
   }
 
-  static async get_notification(req, res) {
+  static async get_addresses(req, res) {
     try {
-      if (!req.params.id) { 
-        return res
-        .status(400)
-        .json({ msg: 'Invalid request, id is required'}); 
-      }
-      const notification = await Notification.findById(req.params.id);
+      const schema = Joi.object({
+        count: Joi
+          .boolean()
+          .default(false),
+        filter: Joi
+          .object({
+            where: Joi
+              .string()
+              .valid(...Object.values(Where)),
+            street_addy: Joi
+              .string(),
+            city: Joi
+              .string(),
+            state: Joi
+              .string()
+              .valid(...Object.values(States))
+              .default(States.lagos),
+            country: Joi
+              .string()
+              .valid(...Object.values(Country))
+              .default(Country.nigeria),
+            zip_code: Joi
+              .string()
+              .length(5)
+              .pattern(/^\d+$/),
+            createdAt: Joi
+              .object({
+                range: Joi
+                  .object({
+                    time_share: Joi
+                      .string()
+                      .valid(...Object.keys(Time_share))
+                      .default(Object.keys(Time_share)[0]),
+                    times: Joi
+                      .number()
+                      .integer()
+                      .default(1),
+                  }),
+                exact: Joi
+                  .date(),
+              })
+              .custom((value, helpers) => {
+                if(Object.values(value).length === 0) {
+                  return helpers.error('Validation Error: no values found');
+                }
+                const { exact, range } = value;
+                if(exact && range) {
+                  return helpers.error('Validation Error: You either set the exact field or set the range field, can\'t have it both ways');
+                }
+                return value;
+              }),
+          }),
+        page: Joi
+          .number()
+          .min(1)
+          .default(1),
+        size: Joi
+          .number()
+          .min(1)
+          .default(5),
+      });
 
-      if (!notification) {
-        return res
-          .status(401)
-          .json({
-            msg: 'Bad request, notification does not exist',
-          });
+    // validate body
+    const { value, error } = schema.validate(req.body);
+    
+    if (error) {
+      throw error;
+    }
+
+    const { count, filter, page, size } = value;
+    let query = {};
+    if(filter) {
+      // build query
+      const { where, street_addy, city, state, country, zip_code, createdAt } = filter;
+    
+      if(street_addy) {
+        query.street_addy = street_addy;
       }
+      if(city) {
+        query.city = city;
+      }
+      if(state) {
+        query.state = state;
+      }
+      if(country) {
+        query.country = country;
+      }
+      if(zip_code) {
+        query.zip_code = zip_code;
+      }
+    
+      if(where) {
+        query.where = where;
+      }
+
+      if(createdAt) {
+        const { exact, range } = createdAt;
+        if(exact) {
+          query.createdAt = exact;
+        }
+        if(range) {
+          const { times, time_share } = range;
+          // between now and the stipulated time
+          query.createdAt = { 
+            $lte: new Date(), 
+            $gte: util.last_times(Time_share[time_share], times, Time_Directory.past)
+          };
+        }
+      }
+    }
+  
+    // if count is true, consumer just wants a count of the filtered documents
+    if (count) {
+      const result = await Address
+          .countDocuments(query);
 
       return res
         .status(200)
         .json({
-          notification,
+          count: result,
         });
+    }
+
+    const { haveNextPage, currentPageExists, totalPages } = await page_info(query, Collections.Address, size, page);
+
+    let gather_data = [];
+
+    if(currentPageExists) {
+      const addresses = await Address
+        .find(query)
+        .skip((page - 1) * size)
+        .limit(size)
+        .sort({ createdAt: -1 })
+        .exec(); //get addresses
+
+      gather_data = [
+        addresses,
+        haveNextPage, //have next page
+        totalPages, //total pages
+      ];
+    }
+
+    if(!currentPageExists) {
+      gather_data = [
+        [],
+        haveNextPage, //have next page
+        totalPages, //total pages
+      ];
+    }
+
+
+    return res
+      .status(201)
+      .json({
+        addresses: gather_data[0],
+        have_next_page: gather_data[1],
+        total_pages: gather_data[2],
+      });
     } catch (error) {
-      
+
       if (error instanceof MongooseError) {
         console.log('We have a mongoose problem', error.message);
         return res.status(500).json({msg: error.message});
       }
-      if (error instanceof JsonWebTokenErro) {
-        console.log('We have a jwt problem', error.message);
-        return res.status(500).json({msg: error.message});
+      if (error instanceof Joi.ValidationError) {
+        return res.status(400).json({
+          msg: 'Invalid request body',
+          errors: error.details,
+        });
       }
       console.log(error);
       return res.status(500).json({msg: error.message});

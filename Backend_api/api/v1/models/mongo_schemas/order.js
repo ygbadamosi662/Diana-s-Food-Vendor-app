@@ -2,13 +2,6 @@ const { Schema, Embedded } = require('mongoose');
 const { Collections, Order_Status, Order_type, Pre_order_Status } = require('../../enum_ish');
 
 
-const scheduledSchema = new Schema({
-  ready_time: {
-    type: Date,
-    required: true,
-  },
-}, { timestamps: true });
-
 const orderItemSchema = new Schema({
   food: {
     type: Schema.Types.ObjectId,
@@ -23,8 +16,8 @@ const orderItemSchema = new Schema({
     type: Number,
     default: null,
   },
-  scheduled_for: {
-    type: scheduledSchema,
+  food_schedule: {
+    type: Schema.Types.ObjectId,
     default: null,
   }
 }, { timestamps: true });
@@ -55,7 +48,7 @@ const pre_orderSchema = new Schema({
   },
   shipping_fee: {
     type: Number,
-    default: 0,
+    default: null,
   },
   total: {
     type: Number,
@@ -64,7 +57,7 @@ const pre_orderSchema = new Schema({
   type: {
     type: String,
     enum: Object.values(Order_type),
-    default: Order_type.delivery,
+    default: null,
   },
   shipment: {
     type: Schema.Types.ObjectId,
@@ -97,7 +90,7 @@ const orderSchema = new Schema({
   },
   order_shipping_fee: {
     type: Number,
-    default: 0,
+    default: null,
   },
   total: {
     type: Number,
@@ -119,7 +112,7 @@ const orderSchema = new Schema({
   type: {
     type: String,
     enum: Object.values(Order_type),
-    default: Order_type.delivery,
+    default: null,
   },
   shipment: {
     type: Schema.Types.ObjectId,
@@ -139,4 +132,4 @@ orderSchema.pre('save', function(next) {
   next();
 });
 
-module.exports = { orderSchema, pre_orderSchema, scheduledSchema, orderItemSchema };
+module.exports = { orderSchema, pre_orderSchema, orderItemSchema };

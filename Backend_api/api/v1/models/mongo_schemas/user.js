@@ -1,9 +1,37 @@
 const validator = require('validator');
 const { Schema } = require('mongoose');
-const { Role, Gender, Collections } = require('../../enum_ish');
+const { Role, Gender, Collections, userStatus, Note_Status } = require('../../enum_ish');
+
+const subjectSchema = new Schema({
+  subject: {
+    type: Schema.Types.ObjectId,
+    required: true,
+  },
+  doc_type: {
+    type: String,
+    enum: Object.values(Collections),
+    required: true,
+  },
+});
+
+const notificationSchema = new Schema({
+  comment: {
+    type: String,
+    required: true,
+  },
+  subject: {
+    type: subjectSchema,
+    required: true,
+  },
+  status: {
+    type: String,
+    enum: Object.values(Note_Status),
+    default: Note_Status.sent,
+  },
+}, { timestamps: true });
 
 const userSchema = new Schema({
-  name: { 
+  name: {
     type: {
       fname: { type: String, required: true, min: 3, max: 20 },
       lname: { type: String, required: true, min: 3, max: 20 },
@@ -55,9 +83,22 @@ const userSchema = new Schema({
     enum: Object.values(Gender),
     required: true,
   },
-  refresh_token: String,
-  resetPasswordToken: String,
-  resetPasswordTokenExpires: Date,
+  status: {
+    type: String,
+    enum: Object.values(userStatus),
+    required: true,
+  },
+  notifications: {
+    type: [notificationSchema],
+    default: [],
+  },
+  resetPassword: { 
+    type: {
+      passwordToken: { type: String, required: true},
+      passwordTokenExpires: { type: Date, required: true },
+    },
+    default: null,
+  },
 }, { timestamps: true });
 
 module.exports = { userSchema };

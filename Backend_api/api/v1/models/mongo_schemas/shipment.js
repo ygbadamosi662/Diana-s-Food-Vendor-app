@@ -8,11 +8,16 @@ const shipmentSchema = new Schema({
     ref: Collections.Order,
     required: true,
   },
-  pre_order_id: {
-    type: String,
+  user: {
+    type: Schema.Types.ObjectId,
+    ref: Collections.User,
+    required: true,
+  },
+  pre_order: {
+    type: Schema.Types.ObjectId,
     default: null,
   },
-  to: {
+  address: {
     type: Schema.Types.ObjectId,
     ref: Collections.Address,
     required: true,

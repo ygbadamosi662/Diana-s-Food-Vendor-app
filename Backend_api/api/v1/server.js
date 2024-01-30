@@ -4,8 +4,8 @@ const { injectMalwares } = require('../v1/index');
 const { startServer } = require('./libs/boot');
 const express = require('express');
 const gracefulShutdown = require('express-graceful-shutdown');
-const { Role, Gender } = require('./enum_ish.js');
-const { user_repo } = require('./repos/user_repo.js');
+const { Role, Gender, userStatus } = require('./enum_ish.js');
+const { User} = require('./models/engine/db_storage');
 const util = require('./util.js');
 require('dotenv').config();
 
@@ -14,13 +14,13 @@ const app = express();
 // App creates the God User of this app if it does not exist
 const God = (async () => {
   try {
-    if(await user_repo.existsByEmail(process.env.APP_EMAIL)) {
+    if(await User.exists({ email: process.env.APP_EMAIL })) {
       console.log(`${process.env.APP_EMAIL}: We are open for business`);
       return null;
     }
-    await user_repo.create_user({
+    await User.create({
       email: process.env.APP_EMAIL,
-      password: await util.encrypt_pwd(process.env.APP_PWD),
+      password: await util.encrypt(process.env.APP_PWD),
       role:Role.super_admin,
       phone: process.env.APP_PHONE,
       name: {
@@ -28,7 +28,8 @@ const God = (async () => {
         lname: 'Api',
         aka: 'Sweet Spoon',
       },
-      gender: Gender.other
+      gender: Gender.other,
+      status: userStatus.active
     });
     console.log(`${process.env.APP_EMAIL}: We are open for business`);
   } catch (error) {

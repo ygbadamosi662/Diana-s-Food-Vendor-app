@@ -3,7 +3,6 @@ const { userSchema } = require('../mongo_schemas/user');
 const { foodSchema } = require('../mongo_schemas/food');
 const { orderSchema } = require('../mongo_schemas/order');
 const { transactionSchema } = require('../mongo_schemas/transaction');
-const { notificationSchema } = require('../mongo_schemas/notification');
 const { reviewSchema } = require('../mongo_schemas/review');
 const { shipmentSchema } = require('../mongo_schemas/shipment');
 const { addressSchema } = require('../mongo_schemas/address');
@@ -83,7 +82,6 @@ class DbStorage {
       const Review = this._conn.model(Collections.Review, reviewSchema);
       const Shipment = this._conn.model(Collections.Shipment, shipmentSchema);
       const Address = this._conn.model(Collections.Address, addressSchema);
-      const Notification = this._conn.model(Collections.Notification, notificationSchema);
 
       // collect repos
       this.mongo_repos.User = User;
@@ -93,7 +91,6 @@ class DbStorage {
       this.mongo_repos.Review = Review;
       this.mongo_repos.Shipment = Shipment;
       this.mongo_repos.Address = Address;
-      this.mongo_repos.Notification = Notification;
 
     } catch (error) {
       throw error;
@@ -195,7 +192,6 @@ db_storage.reload(); //load Collections
  */
 const page_info = async (filter, collection=null, page_size=10, page=1) => {
   try {
-    
     const totalCount = await db_storage.get_a_repo(collection)
       .countDocuments(filter)
       .exec();
@@ -215,7 +211,7 @@ const page_info = async (filter, collection=null, page_size=10, page=1) => {
   }
 }
 
-const { Food, Order, Transaction, User, Review, Shipment, Address, Notification } = db_storage.mongo_repos;
+const { Food, Order, Transaction, User, Review, Shipment, Address } = db_storage.mongo_repos;
 
 module.exports = { 
   storage: db_storage, 
@@ -226,7 +222,6 @@ module.exports = {
   User, 
   Review, 
   Shipment, 
-  Address, 
-  Notification,
+  Address,
   page_info,
 };

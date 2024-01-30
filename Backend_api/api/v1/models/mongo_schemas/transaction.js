@@ -1,5 +1,5 @@
 const { Schema } = require('mongoose');
-const { Collections, Transaction_Status } = require('../../enum_ish');
+const { Collections, Transaction_Status, Transaction_type } = require('../../enum_ish');
 
 const bankAccSchema = new Schema({
   bank_name: {
@@ -27,8 +27,8 @@ const transactionSchema = new Schema({
     ref: Collections.Order,
     required: true,
   },
-  pre_order_id: {
-    type: String,
+  pre_order: {
+    type: Schema.Types.ObjectId,
     default: null,
   },
   amount: {
@@ -51,6 +51,12 @@ const transactionSchema = new Schema({
     type: String,
     enum: Object.values(Transaction_Status),
     default: Transaction_Status.waiting_on_confirmation,
+  },
+  // type in the users context.
+  type: {
+    type: String,
+    enum: Object.values(Transaction_type),
+    required: true,
   },
 }, { timestamps: true });
 

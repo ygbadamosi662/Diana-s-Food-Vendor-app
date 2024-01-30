@@ -2,19 +2,14 @@ const { Schema, Types } = require('mongoose');
 const { Type, Schedule_type, Time_share, Collections } = require('../../enum_ish');
 
 
-const sheduleOrderSchema = new Schema({
-  user: {
-    type: Schema.Types.ObjectId,
-    ref: Collections.User,
-    required: true,
-  },
+const scheduleOrderSchema = new Schema({
   order: {
     type: Schema.Types.ObjectId,
     ref: Collections.Order,
     required: true,
   },
-  pre_order_id: {
-    type: String,
+  pre_order: {
+    type: Schema.Types.ObjectId,
     required: true,
   },
   qty: {
@@ -33,12 +28,20 @@ const scheduleSchema = new Schema({
     required: true,
   },
   orders: {
-    type: [sheduleOrderSchema],
+    type: [scheduleOrderSchema],
     default: [],
   },
-  dispute_orders: {
-    type: [sheduleOrderSchema],
+  disputed_orders: {
+    type: [scheduleOrderSchema],
     default: [],
+  },
+  available_qty: {
+    type: Number,
+    required: true,
+  },
+  total_qty: {
+    type: Number,
+    required: true,
   },
   type: {
     type: String,
@@ -94,35 +97,4 @@ foodSchema.pre('save', function(next) {
   next();
 });
 
-/**
- * Calculates the expiry time for a given schedule.
- *
- * @param {object} schedule - The schedule object.
- * @param {string|null} prefix - The prefix value.
- * @param {string} expiry_prefix - The expiry prefix value. Defaults to "1 hour".
- * @return {Date || null} The expiry time or null.
- */
-const get_schedule_expiry = (schedule, time_share=Time_share.hour, times=1) => {
-  try {
-    if((!schedule.type) || (!schedule.for_when)) {
-      return null;
-    }
-    // if daily
-    if(schedule.type === Schedule_type.daily) {
-      return new Date(schedule.for_when.getTime() - (4 * Time_share.hour));
-    }
-    // one off
-    if(schedule.type === Schedule_type.one_off) {
-      return new Date(schedule.for_when.getTime() - (times * Time_share[time_share]));
-    }
-    // if weekly
-    if((schedule.type === Schedule_type.weekly) || (schedule.type === Schedule_type.monthly)) {
-      return new Date(schedule.for_when.getTime() - (Time_share.day));
-    }
-    return null;
-  } catch (error) {
-    throw error;
-  }
-}
-
-module.exports = { foodSchema, scheduleSchema, get_schedule_expiry, sheduleOrderSchema, Types };
+module.exports = { foodSchema, scheduleSchema, scheduleOrderSchema, Types };

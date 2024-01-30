@@ -1,5 +1,6 @@
 **/node_modules/
 **/package-lock.json
+**/.env
+**/mongo_setup.js
 /v1/models/engine/blacklist.json
-/v1/.env
-/v1/mongo_setup
+/v1/confidential/

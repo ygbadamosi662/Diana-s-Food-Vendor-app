@@ -16,7 +16,7 @@ const authRoutes = express.Router();
 authRoutes.get('/logout', AppController.logout);
 
 // mapped Routes
-authRoutes.use('/users', userRoutes);
+authRoutes.use('/user', userRoutes);
 // adminRoutes.use('/admin', authenticate_admin, adminRoutes);
 authRoutes.use('/admin', authenticate_admin);
 authRoutes.use('/admin', adminRoutes);
