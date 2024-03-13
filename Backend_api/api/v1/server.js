@@ -1,11 +1,12 @@
 process.traceProcessWarnings = true;
+process.env.TZ = 'UTC';
 const { injectRoutes } = require('./routes');
 const { injectMalwares } = require('../v1/index');
 const { startServer } = require('./libs/boot');
 const express = require('express');
 const gracefulShutdown = require('express-graceful-shutdown');
 const { Role, Gender, userStatus } = require('./enum_ish.js');
-const { User} = require('./models/engine/db_storage');
+const { User } = require('./models/engine/db_storage');
 const util = require('./util.js');
 require('dotenv').config();
 

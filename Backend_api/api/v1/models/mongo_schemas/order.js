@@ -1,5 +1,5 @@
 const { Schema, Embedded } = require('mongoose');
-const { Collections, Order_Status, Order_type, Pre_order_Status } = require('../../enum_ish');
+const { Collections, Order_Status, Order_type, Pre_order_Status, payFor } = require('../../enum_ish');
 
 
 const orderItemSchema = new Schema({
@@ -12,7 +12,7 @@ const orderItemSchema = new Schema({
     type: Number,
     required: true,
   },
-  paid_price: {
+  price: {
     type: Number,
     default: null,
   },
@@ -29,6 +29,40 @@ orderItemSchema.pre('save', function(next) {
   next();
 });
 
+const TotalBreakdownSchema = new Schema({
+  order_total: {
+    type: Number,
+    default: 0,
+  },
+  preOrders_total: {
+    type: Number,
+    default: 0,
+  },
+  shipping_fee: {
+    type: Number,
+    default: 0,
+  },
+  total: {
+    type: Number,
+    required: true,
+  },
+}, { timestamps: false });
+
+const TotalQtyBreakdownSchema = new Schema({
+  order_qty: {
+    type: Number,
+    default: 0,
+  },
+  preOrders_qty: {
+    type: Number,
+    default: 0,
+  },
+  total_qty: {
+    type: Number,
+    required: true,
+  },
+}, { timestamps: false });
+
 const pre_orderSchema = new Schema({
   order_content: {
     type: [orderItemSchema],
@@ -36,23 +70,16 @@ const pre_orderSchema = new Schema({
   },
   total_qty: {
     type: Number,
+    required: true,
   },
   status: {
     type: String,
     enum: Object.values(Pre_order_Status),
     default: Pre_order_Status.created,
   },
-  order_total: {
-    type: Number,
-    default: 0,
-  },
-  shipping_fee: {
-    type: Number,
-    default: null,
-  },
   total: {
     type: Number,
-    default: 0,
+    required: true,
   },
   type: {
     type: String,
@@ -70,7 +97,7 @@ const pre_orderSchema = new Schema({
   },
 }, { timestamps: true });
 
-const orderSchema = new Schema({
+const orderSchema = new Schema({ 
   user: {
     type: Schema.Types.ObjectId,
     ref: Collections.User,
@@ -84,20 +111,17 @@ const orderSchema = new Schema({
     type: [pre_orderSchema],
     default: [],
   },
-  order_total: {
-    type: Number,
-    default: 0,
-  },
   order_shipping_fee: {
     type: Number,
     default: null,
   },
-  total: {
-    type: Number,
-    default: 0,
+  total_breakdown: {
+    type: TotalBreakdownSchema,
+    required: true,
   },
-  total_qty: {
-    type: Number,
+  totalQty_breakdown: {
+    type: TotalQtyBreakdownSchema,
+    required: true,
   },
   transaction: {
     type: Schema.Types.ObjectId,

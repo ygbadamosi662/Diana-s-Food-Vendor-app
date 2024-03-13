@@ -13,10 +13,6 @@ const shipmentSchema = new Schema({
     ref: Collections.User,
     required: true,
   },
-  pre_order: {
-    type: Schema.Types.ObjectId,
-    default: null,
-  },
   address: {
     type: Schema.Types.ObjectId,
     ref: Collections.Address,
@@ -29,7 +25,7 @@ const shipmentSchema = new Schema({
   },
   estimated_delivery_time: {
     type: Date,
-    required: true,
+    default: null,
   },
   delivery_time: {
     type: Date,

@@ -182,7 +182,7 @@ class AppController {
           .status(400)
           .json({
           msg: `Account ${user.status}`,
-          resolve: resolve(user.status),
+          resolve_here: resolve(user.status),
         });
       }
       

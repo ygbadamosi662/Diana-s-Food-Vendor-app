@@ -11,7 +11,7 @@ const { get_schedule_expiry } = require('../models/mongo_schemas/food');
 // const { redisClient } = require('../redis');
 const { 
   Type, 
-  Status, 
+  Status,
   Role, 
   Collections, 
   Order_Status, 
@@ -780,23 +780,14 @@ class AdminController {
           if(orders) {
             const { size_range, qty_range } = orders;
             if(size_range) {
-              let setFlag = false
-              // query["schedules"] = { $size: util.range_query(size_range) };
+              const q = util.range_query(size_range, res, 'orders');
               if(size_range.length === 1) {
-                query["schedules.orders"] = util.range_query(size_range, res, 'orders');
-                setFlag = true;
-              }
-              if(setFlag == false ) {
-                const q = util.range_query(size_range, res, 'orders');
-                if(Array.isArray(q)) {
-                  query["schedules"] = { $expr: q[0] };
-                  query["schedules"] ={ $expr: q[1] };
-                }
-                else {
-                  query["schedules"] = { $expr: q };
-                }
+                query["schedules.orders"] = q;
+              } else {
+                query["schedules"] = { $expr: q };
               }
             }
+            
             if(qty_range) {
               query["schedules.orders.qty"] = util.range_query(qty_range, res);
             }
@@ -805,23 +796,14 @@ class AdminController {
           if(disputed_orders) {
             const { size_range, qty_range } = disputed_orders;
             if(size_range) {
-              let setFlag = false
-              // query["schedules"] = { $size: util.range_query(size_range) };
+              const q = util.range_query(size_range, res, 'disputed_orders');
               if(size_range.length === 1) {
-                query["schedules.disputed_orders"] = util.range_query(size_range, res, 'disputed_orders');
-                setFlag = true;
-              }
-              if(setFlag == false ) {
-                const q = util.range_query(size_range, res, 'disputed_orders');
-                if(Array.isArray(q)) {
-                  query["schedules"] = { $expr: q[0] };
-                  query["schedules"] ={ $expr: q[1] };
-                }
-                else {
-                  query["schedules"] = { $expr: q };
-                }
+                query["schedules.disputed_orders"] = q;
+              } else {
+                query["schedules"] = { $expr: q };
               }
             }
+
             if(qty_range) {
               query["schedules.disputed_orders.qty"] = util.range_query(qty_range, res);
             }
@@ -1208,7 +1190,7 @@ class AdminController {
               .object({
                 size_range: Joi
                   .array()
-                  .items(Joi.number().integer().precision(2)),
+                  .items(Joi.number().integer().positive().precision(2)),
                 type: Joi
                   .string()
                   .valid(...Object.values(Order_type)),
@@ -1218,26 +1200,26 @@ class AdminController {
                   .default(Pre_order_Status.created),
                 total_range: Joi
                   .array()
-                  .items(Joi.number().integer().precision(2)),
+                  .items(Joi.number().integer().positive().precision(2)),
                 order_total_range: Joi
                   .array()
-                  .items(Joi.number().integer().precision(2)),
+                  .items(Joi.number().integer().positive().precision(2)),
                 qty_range: Joi
                   .array()
-                  .items(Joi.number().integer()),
+                  .items(Joi.number().integer().positive()),
                 order_content: Joi
                   .object({
                     size_range: Joi
                       .array()
-                      .items(Joi.number().integer().precision(2)),
+                      .items(Joi.number().integer().positive().precision(2)),
                     food_id: Joi
                       .string(),
                     qty_range: Joi
                       .array()
-                      .items(Joi.number().integer()),
+                      .items(Joi.number().integer().positive()),
                     paid_price_range: Joi
                       .array()
-                      .items(Joi.number().integer()),
+                      .items(Joi.number().integer().positive()),
                   }),
                 pickup_time_range: Joi
                   .object({
@@ -1301,26 +1283,26 @@ class AdminController {
               .valid(...Object.values(Order_Status)),
             total_range: Joi
               .array()
-              .items(Joi.number().integer().precision(2)),
+              .items(Joi.number().integer().positive().precision(2)),
             order_total_range: Joi
               .array()
-              .items(Joi.number().integer().precision(2)),
+              .items(Joi.number().integer().positive().precision(2)),
             qty_range: Joi
               .array()
-              .items(Joi.number().integer()),
+              .items(Joi.number().integer().positive()),
             order_content: Joi
               .object({
                 size_range: Joi
                   .array()
-                  .items(Joi.number().integer().precision(2)),
+                  .items(Joi.number().integer().positive().precision(2)),
                 food_id: Joi
                   .string(),
                 qty_range: Joi
                   .array()
-                  .items(Joi.number().integer()),
+                  .items(Joi.number().positive().integer()),
                 paid_price_range: Joi
                   .array()
-                  .items(Joi.number().integer()),
+                  .items(Joi.number().integer().positive().precision(2)),
               }),
             pickup_time_range: Joi
               .object({
@@ -1696,6 +1678,53 @@ class AdminController {
         .status(200)
         .json({
           user,
+        });
+    } catch (error) {
+      if (error instanceof MongooseError) {
+        console.log('We have a mongoose problem', error.message);
+        return res.status(500).json({msg: error.message});
+      }
+      if (error instanceof JsonWebTokenErro) {
+        console.log('We have a jwt problem', error.message);
+        return res.status(500).json({msg: error.message});
+      }
+      console.log(error);
+      return res.status(500).json({msg: error.message});
+    }
+  }
+
+  static async search_user(req, res) {
+    try {
+      const schema = Joi.object({
+        search: Joi
+          .string()
+          .required(),
+      });
+
+      // validate body
+      const { value, error } = schema.validate(req.body);
+      
+      if (error) {
+        throw error;
+      }
+
+      const regexPattern = new RegExp(`.*${value.search}.*`, 'i');
+
+      const users = await User
+        .find({ 
+          $or: [
+            { 'name.fname': { $regex: regexPattern } },
+            { 'name.lname': { $regex: regexPattern } },
+            { 'name.aka': { $regex: regexPattern } },
+            { email: { $regex: regexPattern } },
+            { phone: { $regex: regexPattern } },
+          ]
+         }).select('name email phone _id');
+
+      return res
+        .status(200)
+        .json({
+          users: users,
         });
     } catch (error) {
       if (error instanceof MongooseError) {
@@ -2542,7 +2571,7 @@ class AdminController {
 
 
     return res
-      .status(201)
+      .status(200)
       .json({
         addresses: gather_data[0],
         have_next_page: gather_data[1],

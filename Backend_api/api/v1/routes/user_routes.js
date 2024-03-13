@@ -24,7 +24,6 @@ userRoutes.get('/review/delete/:id', UserController.delete_my_review);
 userRoutes.post('/notification/notifications', UserController.get_my_notifications);
 userRoutes.post('/notification/read-notification/:id', UserController.read_my_notification);
 userRoutes.get('/notification/:id', UserController.get_my_notification);
-userRoutes.post('/food/cart/add', UserController.add_to_cart);
 userRoutes.post('/transactions', UserController.get_my_transactions);
 userRoutes.post('/transaction/:id', UserController.get_my_transaction);
 userRoutes.post('/shipemnts', UserController.get_my_shipments);
@@ -34,6 +33,10 @@ userRoutes.post('/address/:id', UserController.get_my_address);
 userRoutes.post('/orders', UserController.get_my_orders);
 userRoutes.post('/order/:id', UserController.get_my_order);
 userRoutes.get('/pwt/test', UserController.test_pwt);
+userRoutes.post('/cart/add', UserController.add_to_cart);
+userRoutes.get('/cart', UserController.get_my_cart);
+userRoutes.post('/cart/remove', UserController.remove_from_cart);
+userRoutes.post('/cart/checkout', UserController.checkout);
 
 
 

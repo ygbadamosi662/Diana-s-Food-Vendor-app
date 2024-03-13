@@ -3,17 +3,26 @@
  * handles all payment operations
  * @author Yusuf Gbadamosi <https://github.com/ygbadamosi662>
  */
-const { storage } = require('../models/engine/db_storage');
-const { appAx } = require('../appAxios');
+const { storage, Transaction } = require('../models/engine/db_storage');
+const axios = require('axios');
+const { Transaction_Status, Transaction_type} = require('../enum_ish');
 require('dotenv').config();
 
 class PaymentService {
   constructor (){
-    this.secret_key = process.env.APP_SECRET_KEY;
+    this.secret_key = process.env.PAYSTACK_SECRET_KEY;
     this.acc_expires_in = 30;
+    this.appAx = axios.create({
+      baseURL: `http://127.0.0.1:${process.env.APP_PORT || 5000}`,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.secret_key}`
+      }
+    });
   }
 
   async initiate_payment(payload, res, pwt_off=true) {
+    const { user, email, amount } = payload;
     try {
       if(!pwt_off) {
           return {
@@ -23,16 +32,18 @@ class PaymentService {
             amnt: 5000,
           };
       }
-      let now = new Date();
-      now.setMinutes(now.getMinutes() + this.acc_expires_in);
+      let expires = new Date();
+      expires.setMinutes(expires.getMinutes() + this.acc_expires_in);
 
-      const { response: { data, status } } = await appAx.post('https://api.paystack.co/charge', { 
-        ...payload,
+      const { data, status } = await this.appAx.post('https://api.paystack.co/charge', { 
+        email: email ? email : user.email,
+        amount: amount,
         bank_transfer: {
-            account_expires_at: now.toISOString(),
-          }
+          "account_expires_at": expires.toISOString(),
+        }
        });
       
+       const { status: realStatus, data: realData } = data;
       if (status !== 200) {
         return res
           .status(500)
@@ -41,7 +52,7 @@ class PaymentService {
           });
       }
 
-      if(!data.status) {
+      if(!realStatus) {
         return res
           .status(400)
           .json({
@@ -49,14 +60,7 @@ class PaymentService {
           });
       }
 
-      
-      return {
-        acc_name: data.data.account_name,
-        acc_number: data.data.account_number,
-        bank_name: data.data.bank.name,
-        amnt: data.data.amount,
-        from_payment_service: data,
-      };
+      return realData;
     } catch (error) {
       res
         .status(500)
@@ -66,6 +70,28 @@ class PaymentService {
       console.log(error);
     }
     
+  }
+
+  async createTransaction(dataFromService, payload) {
+    const { user, order, amount } = payload;
+    const bank = {
+      bank_name: dataFromService.bank.name,
+      account_name: dataFromService.account_name,
+      account_number: dataFromService.account_number,
+    };
+
+    const transaction = await Transaction.create({
+      user: user._id,
+      order: order._id,
+      amount,
+      credit_account: bank,
+      debit_account: null,
+      data_from_payment_service: dataFromService,
+      status: Transaction_Status.initiated,
+      type: Transaction_type.credit
+    });
+    
+    return transaction;
   }
 
 }

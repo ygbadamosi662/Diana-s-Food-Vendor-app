@@ -14,14 +14,14 @@ class FoodScheduleService {
       this.schedules = [];
     }
 
-    /**
-     * A function to create a schedule for food orders, with optional parameters to customize the schedule.
-     *
-     * @param {array} schedule - the schedule object
-     * @param {object} food - the food object for which the schedule is being created
-     * @param {boolean} useThisSchechules - a boolean to indicate whether to return the new_schedule or push it to this.schedules
-     * @return {object} an object containing the status of the schedule creation and the new schedule if the useThisSchedules is false, else it returns an object containing the status of the schedule creation and pushes the new schedule to the this.schedules array
-     */
+     /**
+      * Create a schedule based on the provided schedule, food, and useThisSchechules parameters.
+      *
+      * @param {object} schedule - The schedule object
+      * @param {object} food - The food object
+      * @param {boolean} useThisSchechules - Flag to indicate if the provided schedules should be used
+      * @return {object | null} Either an object containing data about the schedule or null if the schedule cannot be created
+      */
     create_a_schedule(schedule={}, food={}, useThisSchechules=true) {
       if((!schedule.type || !schedule.for_when) || (!food.name)) {
         return null;

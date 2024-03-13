@@ -60,11 +60,13 @@ const Pre_order_Status = {
 };
 
 const Transaction_Status = {
+  initiated: 'INITIATED',
   waiting_on_confirmation: 'WOC',
   successful: 'SUCCESSFUL',
   failed: 'FAILED',
   dispute: 'DISPUTE',
   resolved: 'DISPUTE RESOLVED',
+  cancelled: 'CANCELLED',
 };
 
 const Transaction_type = {
@@ -156,6 +158,14 @@ const userStatus = {
   deleted: 'DELETED',
 };
 
+const payFor = {
+  all: 'ALL',
+  all_orders: 'ALL ORDERS',
+  orders: 'ORDERS',
+  all_preOrders: 'ALL PRE ORDERS',
+  preOrders: 'PRE ORDERS',
+};
+
 module.exports = { 
   Order_type, 
   Role, 
@@ -177,5 +187,7 @@ module.exports = {
   Events,
   userStatus,
   Country,
-  Transaction_type
+  Transaction_type,
+  payFor,
+  food_measurement,
 };

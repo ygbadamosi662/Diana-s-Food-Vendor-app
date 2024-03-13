@@ -101,4 +101,11 @@ const userSchema = new Schema({
   },
 }, { timestamps: true });
 
+// userSchema.pre('save', function(next) {
+//   if(this.notifications.length >= 15) {
+//     this.notifications.shift();
+//   }
+//   next();
+// });
+
 module.exports = { userSchema };

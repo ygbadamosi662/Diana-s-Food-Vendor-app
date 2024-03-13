@@ -27,6 +27,10 @@ const scheduleSchema = new Schema({
     type: Date,
     required: true,
   },
+  sold_out: {
+    type: Boolean,
+    default: false,
+  },
   orders: {
     type: [scheduleOrderSchema],
     default: [],
@@ -54,6 +58,14 @@ const scheduleSchema = new Schema({
   }
 }, { timestamps: true });
 
+scheduleSchema.pre('save', function(next) {
+  // to check if sold_out
+  if(this.available_qty === 0) {
+    this.sold_out = true;
+  }
+  next();
+});
+
 const foodSchema = new Schema({
   name: {
     type: String,
@@ -77,6 +89,10 @@ const foodSchema = new Schema({
     type: Number,
     default: 0,
   },
+  sold_out: {
+    type: Boolean,
+    default: false,
+  },
   schedules: {
     type: [scheduleSchema],
     default: [],
@@ -92,6 +108,11 @@ foodSchema.pre('save', function(next) {
     if(invalid_type) {
       return next(new Error(`Invalid food type: ${invalid_type}`));
     }
+  }
+
+  // to check if sold_out
+  if(this.qty === 0) {
+    this.sold_out = true;
   }
   
   next();

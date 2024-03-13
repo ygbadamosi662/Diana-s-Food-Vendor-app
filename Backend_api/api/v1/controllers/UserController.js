@@ -3,14 +3,18 @@ const { shipping_service } = require('../services/shipping_service');
 const { appAx } = require('../appAxios');
 const { Shipment, Address, Transaction, User, Food, Review, Order, page_info } = require('../models/engine/db_storage')
 const { notification_service } = require('../services/notification_service');
+const { checkout_service } = require('../services/checkout_service');
+const { cart_service } = require('../services/carting_service');
 const { Types } = require('mongoose');
 const { Connection } = require('../models/engine/db_storage');
 const MongooseError = require('mongoose').Error;
 const JsonWebTokenErro = require('jsonwebtoken').JsonWebTokenError;
 const Joi = require('joi');
-const { Collections, 
+const { 
+  Collections, 
   Order_Status, 
-  Transaction_Status, 
+  Transaction_Status,
+  Pre_order_Status,
   Role, 
   Type, 
   Order_type, 
@@ -22,7 +26,7 @@ const { Collections,
   Note_Status,
   Schedule_type,
   Time_Directory,
-  Pre_order_Status
+  payFor
  } = require('../enum_ish');
 /**
  * Contains the UserController class 
@@ -389,7 +393,7 @@ class UserController {
 
   static async test_pwt(req, res) {
     try {
-      let now = new Date();
+      const now = new Date();
       now.setMinutes(now.getMinutes() + 5);
       
       const paystack_res = await appAx.post('https://api.paystack.co/charge', JSON.stringify({
@@ -399,11 +403,48 @@ class UserController {
           "account_expires_at": "2023-12-12T13:10:00Z"
         }
       }));
-      console.log(paystack_res)
+      console.log(paystack_res.data)
       return res
         .status(200)
         .json({
-          pwt: paystack_res,
+          pwt: paystack_res.data,
+        });
+    } catch (error) {
+      
+      if (error instanceof MongooseError) {
+        console.log('We have a mongoose problem', error.message);
+        return res.status(500).json({msg: error.message});
+      }
+      if (error instanceof JsonWebTokenErro) {
+        console.log('We have a jwt problem', error.message);
+        return res.status(500).json({msg: error.message});
+      }
+      console.log(error);
+      return res.status(500).json({msg: error.message});
+    }
+  }
+
+  static async initiate_pwt(req, res) {
+    try {
+      const schema = Joi.object({
+        email: Joi
+          .string()
+          .email({ minDomainSegments: 2, tlds: { allow: ['com', 'net'] } }),
+      });
+
+      // validate body
+      const { value, error } = schema.validate(req.body);
+      
+      if (error) {
+        throw error;
+      }
+
+      const { amount, email, order_id } = value;
+      
+      return res
+        .status(200)
+        .json({
+          pwt: paystack_res.data,
         });
     } catch (error) {
       
@@ -847,6 +888,50 @@ class UserController {
     }
   }
 
+  static async search_food(req, res) {
+    try {
+      const schema = Joi.object({
+        search: Joi
+          .string()
+          .required(),
+      });
+
+      // validate body
+      const { value, error } = schema.validate(req.body);
+      
+      if (error) {
+        throw error;
+      }
+
+      const regexPattern = new RegExp(`.*${value.search}.*`, 'i');
+
+      const foods = await Food
+        .find({ 
+          $or: [
+            { name: { $regex: regexPattern } },
+            { schedules: { $elemMatch: { hashtag: { $regex: regexPattern } }} },
+          ]
+         }).select('name types fave_count qty price _id');
+
+      return res
+        .status(200)
+        .json({
+          users: foods,
+        });
+    } catch (error) {
+      if (error instanceof MongooseError) {
+        console.log('We have a mongoose problem', error.message);
+        return res.status(500).json({msg: error.message});
+      }
+      if (error instanceof JsonWebTokenErro) {
+        console.log('We have a jwt problem', error.message);
+        return res.status(500).json({msg: error.message});
+      }
+      console.log(error);
+      return res.status(500).json({msg: error.message});
+    }
+  }
+
   static async update_user(req, res) {
     try {
       const schema = Joi.object({
@@ -1193,16 +1278,13 @@ class UserController {
           });
       }
 
-      const user = await User.findById(req.user.id);
+      const user = new Types.ObjectId(req.user.id);
 
       // find open cart
-      let order = await Order
-        .findOne({
-          user: user._id,
-          status: Order_Status.in_cart,
-        })
-        .populate('pre_orders.order_content.food order_content.food')
-        .exec();
+      let order = await Order.findOne({
+        user: new Types.ObjectId(req.user.id),
+        status: Order_Status.in_cart
+      }).populate('pre_orders.order_content.food order_content.food');
 
       let added_flag = false;
       const cost = food.price * qty;
@@ -1230,9 +1312,9 @@ class UserController {
               food_schedule: new Types.ObjectId(schedule_id),
             }],
             ready_time: delivery_time ? delivery_time : schedule.for_when,
-            total_qty: qty,
             order_total: cost,
-            total: cost
+            total: cost,
+            total_qty: qty,
           };
 
           // create order
@@ -1240,21 +1322,16 @@ class UserController {
             user: user,
             status: Order_Status.in_cart,
             pre_orders: [new_pre_order],
-            total_qty: qty,
-            total: cost,
-            order_total: cost
+            totalQty_breakdown: {
+              preOrders_qty: qty,
+              total_qty: qty
+            },
+            total_breakdown: {
+              preOrders_total: cost,
+              total: cost
+            }
           });
 
-          // update food schedule
-          // let pre_order_id = order.pre_orders[0]._id.toString();
-          // let ssf = schedule.orders;
-          // ssf.push({
-          //   order: order,
-          //   user: user,
-          //   pre_order_id: pre_order_id,
-          //   qty: value.qty,
-          // })
-          // schedule.orders = ssf;
           added_flag = true;
         }
 
@@ -1267,9 +1344,14 @@ class UserController {
               food: food,
               qty: qty,
             }],
-            total_qty: qty,
-            order_total: cost,
-            total: cost
+            totalQty_breakdown: {
+              order_qty: qty,
+              total_qty: qty
+            },
+            total_breakdown: {
+              order_total: cost,
+              total: cost
+            }
           });
         }
       } 
@@ -1277,6 +1359,7 @@ class UserController {
       if((added_flag === false) && order) {
         // if pre-order
         if(pre_order) {
+          console.log("im here")
           const { schedule_id, delivery_time } = pre_order;
           const schedule = food.schedules.id(new Types.ObjectId(schedule_id));
           const now = new Date();
@@ -1298,8 +1381,10 @@ class UserController {
                     qty: qty,
                     food_schedule: new Types.ObjectId(schedule_id),
                   });
-                  order.pre_orders[0].total += cost
-                  order.pre_orders[0].order_total += cost
+                  // update pre_order
+                  order.pre_orders[0].total += cost;
+                  order.pre_orders[0].order_total += cost;
+                  order.pre_orders[0].total_qty += qty;
 
                   // added
                   added_flag = true;
@@ -1318,6 +1403,8 @@ class UserController {
                   order_total: cost,
                   total: cost
                 };
+
+                // update order
                 order.pre_orders.push(new_preOrder);
                 added_flag = true;
               }
@@ -1345,7 +1432,6 @@ class UserController {
                   
                     // added
                     added_flag = true;
-                    return pr;
                   }
                   return pr;
                 });
@@ -1364,14 +1450,29 @@ class UserController {
                   order_total: cost,
                   total: cost
                 });
+
+                added_flag = true;
               }
             }
 
             if(added_flag) {
-              order.total_qty += qty;
-              order.order_total += cost;
-              order.total += cost;
+              order.totalQty_breakdown['preOrders_qty'] += qty;
+              order.totalQty_breakdown['total_qty'] += qty;
+              order.total_breakdown['preOrders_total'] += cost;
+              order.total_breakdown['total'] += cost;
             }
+          } else {
+            order.pre_orders.push({
+              order_content: [{
+                food: food,
+                qty: qty,
+                food_schedule: new Types.ObjectId(schedule_id),
+              }],
+              ready_time: delivery_time ? delivery_time : schedule.for_when,
+              total_qty: qty,
+              order_total: cost,
+              total: cost
+            });
           }
         }
 
@@ -1381,9 +1482,10 @@ class UserController {
             food: food,
             qty: qty,
           });
-          order.total_qty += qty;
-          order.total += cost;
-          order.order_total += cost;
+          order.totalQty_breakdown['order_qty'] += qty;
+          order.totalQty_breakdown['total_qty'] += qty;
+          order.total_breakdown['order_total'] += cost;
+          order.total_breakdown['total'] += cost;
         }
       }
 
@@ -1411,62 +1513,175 @@ class UserController {
     }
   }
 
+  static async remove_from_cart(req, res) {
+    try {
+      const schema = Joi.object({
+        item_id: Joi
+          .string(),
+        preOrder_id: Joi
+          .string(),
+        ifPreOrder: Joi
+          .boolean()
+          .required(),
+        remove_all: Joi
+          .boolean()
+          .required(),
+      })
+      .custom((value, helpers) => {
+        const { ifPreOrder, preOrder_id } = value;
+        if(ifPreOrder) {
+          if(!preOrder_id) {
+            return helpers.error('preOrder_id is required if ifPreOrder is true');
+          }
+        }
+        return value;
+      });
+
+      // validate body
+      const { value, error } = schema.validate(req.body);
+      
+      if (error) {
+        throw error;
+      }
+
+      const { item_id, ifPreOrder, remove_all, preOrder_id } = value;
+
+      // check if there is an open cart
+      const cart = await Order.findOne({
+        user: new Types.ObjectId(req.user.id),
+        status: Order_Status.in_cart
+      });
+
+      // validate cart
+      if(!cart) {
+        return res
+          .status(400)
+          .json({
+            msg: 'Invalid Request, You have no item in cart',
+          });
+      }
+
+      if(ifPreOrder) {
+        if(remove_all) {
+          const preOrder = cart.pre_orders.id(new Types.ObjectId(item_id));
+          cart.total_breakdown['preOrders_total'] -= preOrder.order_total;
+          cart.total_breakdown['total'] -= preOrder.total;
+          cart.totalQty_breakdown['preOrders_qty'] -= preOrder.total_qty;
+          cart.totalQty_breakdown['total_qty'] -= preOrder.total_qty;
+          cart.pre_orders.id(preOrder._id).deleteOne();
+
+          await cart.save();
+        } else {
+          const preOrder = cart.pre_orders.id(new Types.ObjectId(preOrder_id));
+          const item = preOrder.order_content.id(new Types.ObjectId(item_id));
+          if((preOrder.order_content.length === 1) && (preOrder.order_content[0] === item)) {
+            cart.pre_orders.id(preOrder._id).deleteOne();
+          } else {
+            preOrder.total -= item.price;
+            preOrder.total_qty -= item.qty;
+
+            preOrder.order_content.id(item._id).deleteOne();
+
+
+            cart.pre_orders = cart.pre_orders.map((pr) => {
+              if(pr._id === preOrder._id) {
+                pr = preOrder;
+              }
+              return pr;
+            });
+          }
+
+          cart.total_breakdown['preOrders_total'] -= item.price;
+          cart.total_breakdown['total'] -= item.price;
+          cart.totalQty_breakdown['preOrders_qty'] -= item.qty;
+          cart.totalQty_breakdown['total_qty'] -= item.qty;
+
+          await cart.save();
+        }
+      } else {
+        if(remove_all) {
+          await Order.deleteOne({ _id: cart._id });
+        } else {
+          const item = cart.order_content.id(new Types.ObjectId(item_id));
+          if((cart.order_content.length === 1) && (cart.order_content[0] === item)) {
+            await Order.deleteOne({ _id: cart._id });
+          } else {
+            cart.total_breakdown['order_total'] -= item.price;
+            cart.total_breakdown['total'] -= item.price;
+            cart.totalQty_breakdown['order_qty'] -= item.qty;
+            cart.totalQty_breakdown['total_qty'] -= item.qty;
+            cart.order_content.id(item._id).deleteOne();
+            await cart.save();
+          }
+        }
+      }
+
+      return res
+        .status(201)
+        .json({
+          msg: `Removed from cart successfully`,
+        });
+    } catch (error) {
+      
+      if (error instanceof MongooseError) {
+        console.log('We have a mongoose problem', error.message);
+        return res.status(500).json({msg: error.message});
+      }
+      if (error instanceof JsonWebTokenErro) {
+        console.log('We have a jwt problem', error.message);
+        return res.status(500).json({msg: error.message});
+      }
+      console.log(error);
+      return res.status(500).json({msg: error.message});
+    }
+  }
+
   // when payment have been implemented, come back here
   static async checkout(req, res) {
     try {
-      /**
-       * Check if the order type is delivery.
-       * 
-       * @param {object} req - The request object.
-       * @returns {boolean} - True if the order type is delivery, false otherwise.
-       * @throws {Error} - If there is an error while checking the order type.
-       */
       const gossip = (req) => {
-        try {
-          // Check if the order type is delivery
-          if (req.body.type === Order_type.delivery) {
-            return true;
-          }
-          return false;
-        } catch (error) {
-          // Throw any error that occurs while checking the order type
-          throw error;
-        }
+        return req.body.type === Order_type.delivery;
       };
 
       const schema = Joi.object({
-        order_id: Joi
-          .string()
-          .required(),
         type: Joi
           .string()
           .valid(...Object.values(Order_type))
           .default(Order_type.pickup),
+        pay_for: Joi
+          .object({
+            type: Joi
+              .string()
+              .valid(...Object.values(payFor))
+              .default(payFor.all),
+            ids: Joi
+              .array()
+              .items(Joi.string()),
+          })
+          .custom((value, helpers) => {
+            const { type, ids } = value;
+            if(![payFor.all, payFor.all_orders, payFor.all_preOrders].includes(type)) {
+              if(!ids) {
+                return helpers.error('ids is required');
+              }
+              return value
+            }
+            return value;
+          }),
         if_delivery: Joi
           .object({
             if_old_addres: Joi
               .boolean()
               .required(),
             address_id: Joi
-              .string()
-              .custom((value, helpers) => {
-                const { if_old_address, type } = this.context();
-
-                if(if_old_address) {
-                  if(value) {
-                    return value;
-                  }
-                  return helpers.error('invalid request, address_id is required');
-                }
-                return;
-              }),
+              .string(),
             new_address: Joi
               .object({
                 where: Joi
                   .string()
                   .valid(...Object.values(Where))
                   .default(Where.other),
-                addy: Joi
+                street_addy: Joi
                   .string()
                   .required(),
                 city: Joi
@@ -1474,8 +1689,8 @@ class UserController {
                   .required(),
                 country: Joi
                   .string()
-                  .valid(...Object.values(Countries))
-                  .default(Countries.nigeria),
+                  .valid(...Object.values(Country))
+                  .default(Country.nigeria),
                 states: Joi
                   .string()
                   .valid(...Object.values(States))
@@ -1488,26 +1703,36 @@ class UserController {
                 local_description: Joi
                   .string(),
               })
-              .custom((value, helpers) => {
-                const { if_old_address, type } = this.context();
-
-                if(!if_old_address) {
-                  if(value) {
-                    return value;
-                  }
-                  return helpers.error('invalid request, new_address should not be set, if_old_address is true');
-                }
-                return;
-              }),
           })
           .custom((value, helpers) => {
+            const { if_old_address, new_address, address_id} = value;
             if(gossip()) {
               if(value) {
-                return value;
+                if(if_old_address) {
+                  if(address_id) {
+                    if(new_address) {
+                      return helpers.error('invalid request, if you are using an old address, new_address is not needed');
+                    }
+                    return value;
+                  }
+                  return helpers.error('invalid request, address_id is required');
+                } else {
+                  if(new_address) {
+                    if(address_id) {
+                      return helpers.error('invalid request, if you are using a new address, address_id is not needed');
+                    }
+                    return value;
+                  }
+                  return helpers.error('invalid request, new_address is required');
+                }
               }
               return helpers.error('invalid request, address is required');
+            } else {
+              if(value) {
+                return helpers.error('invalid request, if type === PICKUP, address is not needed');
+              }
+              return value;
             }
-            return;
           }),
       });
 
@@ -1518,50 +1743,37 @@ class UserController {
         throw error;
       }
 
-      const { order_id, type, if_delivery } = value;
+      const { if_delivery, pay_for } = value;
 
-      const order = await Order
-        .findById(order_id)
-        .exec();
+      const cart = await Order.findOne({
+        user: new Types.ObjectId(req.user.id),
+        status: Order_Status.in_cart
+      });
 
-      // check if recipe exists
-      if(!order) {
+      // check if order exists
+      if(!cart) {
         return res
           .status(400)
           .json({
-            msg: 'Invalid Request, order does not exist',
+            msg: 'Invalid Request, You have no item in cart',
           });
       }
 
-      const user = await User.findById(req.user.id)
-        .select('_id')
-        .exec();
-      // validating order,user
-      if(order.user !== user._id) {
-        return res
-          .status(400)
-          .json({
-            msg: 'Bad Request, Invalid credentials',
-          });
-      }
+      const user = await User.findById(new Types.ObjectId(req.user.id));
+      const processedCart = await cart_service.revamp_cart(cart, true);
 
-      // to be continued
-
-      // if delivery
-      if(value.type === Order_type.pickup) {
-
-      }
-
-      // if pickup
-      if(value.type === Order_type.delivery) {
-
-      }
+      const data = await checkout_service.handleInitiatePayment({ 
+        processedCart: processedCart,
+        ids: pay_for?.ids, 
+        if_delivery: if_delivery, 
+        user: user
+      }, pay_for.type, res);
 
       return res
         .status(201)
         .json({
-          msg: `order added to cart successfully`,
-          order_id: order._id
+          msg: `Payment initialized successfully`,
+          data: data
         });
     } catch (error) {
       
@@ -2008,7 +2220,7 @@ class UserController {
       }
 
       // if not order.user or admin
-      if((req.user.id !== order.user.toString()) || (![Role.admin, Role.super_admin].includes(req.user.role))) {
+      if((req.user.id !== order.user.toString()) && (![Role.admin, Role.super_admin].includes(req.user.role))) {
         return res
           .status(400)
           .json({ msg: 'Bad request, Invalid credentials'});
@@ -2017,6 +2229,42 @@ class UserController {
       return res
         .status(200)
         .json({ order});
+    } catch (error) {
+      if (error instanceof MongooseError) {
+        console.log('We have a mongoose problem', error.message);
+        return res.status(500).json({msg: error.message});
+      }
+      if (error instanceof JsonWebTokenErro) {
+        console.log('We have a jwt problem', error.message);
+        return res.status(500).json({msg: error.message});
+      }
+      console.log(error);
+      return res.status(500).json({msg: error.message});
+    }
+  }
+
+  static async get_my_cart(req, res) {
+    // serves both user and admin
+    try {
+      const cart = await Order.findOne({
+        user: new Types.ObjectId(req.user.id),
+        status: Order_Status.in_cart
+      });
+
+      // if user does not have an open cart
+      if(!cart) {
+        return res
+          .status(400)
+          .json({ msg: 'User have no item in cart'});
+      }
+
+      const frontCart = await cart_service.revamp_cart(cart);
+      
+      return res
+        .status(200)
+        .json({
+          cart: frontCart
+        });
     } catch (error) {
       if (error instanceof MongooseError) {
         console.log('We have a mongoose problem', error.message);
@@ -2050,7 +2298,7 @@ class UserController {
       }
 
       // if not order.user or admin
-      if((req.user.id !== transaction.user.toString()) || (![Role.admin, Role.super_admin].includes(req.user.role))) {
+      if((req.user.id !== transaction.user.toString()) && (![Role.admin, Role.super_admin].includes(req.user.role))) {
         return res
           .status(400)
           .json({ msg: 'Bad request, Invalid credentials'});
@@ -2094,7 +2342,7 @@ class UserController {
       }
 
       // if not order.user or admin
-      if((req.user.id !== shipment.order.user.toString()) || (![Role.admin, Role.super_admin].includes(req.user.role))) {
+      if((req.user.id !== shipment.order.user.toString()) && (![Role.admin, Role.super_admin].includes(req.user.role))) {
         return res
           .status(400)
           .json({ msg: 'Bad request, Invalid credentials'});
@@ -2136,7 +2384,7 @@ class UserController {
       }
 
       // if not order.user or admin
-      if((req.user.id !== address.user.toString()) || (![Role.admin, Role.super_admin].includes(req.user.role))) {
+      if((req.user.id !== address.user.toString()) && (![Role.admin, Role.super_admin].includes(req.user.role))) {
         return res
           .status(400)
           .json({ msg: 'Bad request, Invalid credentials'});

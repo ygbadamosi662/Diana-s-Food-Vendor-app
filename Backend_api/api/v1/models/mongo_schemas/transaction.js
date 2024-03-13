@@ -27,10 +27,6 @@ const transactionSchema = new Schema({
     ref: Collections.Order,
     required: true,
   },
-  pre_order: {
-    type: Schema.Types.ObjectId,
-    default: null,
-  },
   amount: {
     type: Number,
     required: true,
@@ -41,7 +37,7 @@ const transactionSchema = new Schema({
   },
   debit_account: {
     type: bankAccSchema,
-    required: true,
+    default: null
   },
   data_from_payment_service: {
     type: Schema.Types.Mixed,
@@ -59,5 +55,12 @@ const transactionSchema = new Schema({
     required: true,
   },
 }, { timestamps: true });
+
+transactionSchema.pre('save', function(next) {
+  if ((![Transaction_Status.initiated, Transaction_Status.cancelled].includes(this.status)) && (!this.debit_account)) {
+    return next(new Error('Error Debit account is required for a suuccessful transaction'));
+  }
+  next();
+});
 
 module.exports = { transactionSchema, bankAccSchema };

@@ -49,17 +49,18 @@ class Utility {
    *
    * @param {Array|null} arr - the array for the range query
    * @param {Response} res - the response object
-   * @param {number|null} size_of_field - the size of the array field
+   * @param {number|null} field - the field for the range query
    * @return {Object} the result of the range query
    */
-  range_query(arr=null, res, size_of_field=null) {
+  range_query(arr=null, res, field=null) {
     try {
+      // the field param should only be passed when querying the size of the field
       // [0, x]: will mean <= x
       // [x, 0]: will mean >= x
       // [x, y]: will mean >= x, <= y
       // [x]: will mean === x
 
-      // size_of_field is used to check if the query is for size of an array field and size_of_field is the name of the field
+      // field is used to check if the query is for size of an array field and field is the name of the field
       if (arr) {
         if((arr.length < 1) || (arr.length > 2)) {
           return res
@@ -70,29 +71,29 @@ class Utility {
         }
 
         if (arr.length === 1) {
-          if(size_of_field) {
+          if(field) {
             return { $size: arr[0] };
           }
           return arr[0];
         }
         if (arr.length === 2) {
           if(arr[0] === 0) {
-            if(size_of_field) {
-              return { $lte: [{ $size: `$${size_of_field}` }, arr[1]] };
+            if(field) {
+              return { $lte: [{ $size: `$${field}` }, arr[1]] };
             }
             return { $lte: arr[1] };
           }
           if(arr[1] === 0) {
-            if(size_of_field) {
-              return { $gte: [{ $size: `$${size_of_field}` }, arr[0]] };
+            if(field) {
+              return { $gte: [{ $size: `$${field}` }, arr[0]] };
             }
             return { $gte: arr[0] };
           }
-          if(size_of_field) {
+          if(field) {
             return {
               $and: [
-                { $gte: [{ $size: `$${size_of_field}` }, arr[0]] },
-                { $lte: [{ $size: `$${size_of_field}` }, arr[1]] }
+                { $gte: [{ $size: `$${field}` }, arr[0]] },
+                { $lte: [{ $size: `$${field}` }, arr[1]] }
               ]
             };
           }
@@ -168,7 +169,11 @@ class Utility {
    * @return {boolean} True if the food can fulfill the order quantity, false otherwise.
    */
   can_food_fullfill_order (food=null, qty=1, schedule_id=null) {
-    if(!food) {
+    if(
+        (!food) || 
+        (!schedule_id && food.sold_out) ||
+        (schedule_id && food.schedules.id(new Types.ObjectId(schedule_id)).sold_out)
+      ) {
       return false;
     }
     try {
