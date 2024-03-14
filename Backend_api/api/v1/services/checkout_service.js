@@ -5,6 +5,7 @@
  */
 const { Order, Shipment, Address, Connection } = require('../models/engine/db_storage');
 const axios = require('axios');
+const { Types } = require('mongoose');
 const { Order_Status, payFor, Order_type } = require('../enum_ish');
 const { shipping_service } = require('../services/shipping_service');
 const { payment_service } = require('../services/payment_service')
@@ -18,7 +19,6 @@ class CheckoutService {
     const { user, preparedOrder, if_delivery } = payload;
     const dataFromService = await payment_service.initiate_payment({ user: user, amount: preparedOrder.total_breakdown.total }, res);
 
-
     const data = await Connection.transaction(async () => {
       const transaction = await payment_service.createTransaction(dataFromService,
       { 
@@ -31,7 +31,8 @@ class CheckoutService {
         const { if_old_address, address_id, new_address } = if_delivery;
         let address = {};
         if(if_old_address) {
-          address = await Shipment.findOne({ _id: new Types.ObjectId(address_id), user: user._id });
+          const _id = new Types.ObjectId(address_id);
+          address = await Address.findOne({ _id: _id, user: user._id });
           if(!address) {
             return res
               .status(400)
@@ -82,17 +83,17 @@ class CheckoutService {
         const order_content = processedCart.order_content;
         const shippingFee = if_delivery ? shipping_service.get_fee() : 0;
         data = await Connection.transaction(async () => {
-          const newOrder = Order.create({
+          const newOrder = await Order.create({
             user: user._id,
             order_content: order_content,
             totalQty_breakdown: {
-              orders_qty: processedCart.totalQty_breakdown.orders_qty,
-              total_qty: processedCart.totalQty_breakdown.orders_qty
+              orders_qty: processedCart.totalQty_breakdown.order_qty,
+              total_qty: processedCart.totalQty_breakdown.order_qty
             },
             total_breakdown: {
-              orders_total: processedCart.total_breakdown.orders_total,
+              orders_total: processedCart.total_breakdown.order_total,
               shipping_fee: shippingFee,
-              total: shippingFee + processedCart.total_breakdown.orders_total
+              total: shippingFee + processedCart.total_breakdown.order_total
             },
           });
       
@@ -100,12 +101,12 @@ class CheckoutService {
         });
       }
       if(pay_for === payFor.all_preOrders) {
-        const preOrders = processedCart.preOrders;
+        const preOrders = processedCart.pre_orders;
         const shippingFee = if_delivery ? shipping_service.get_fee() : 0;
         data = await Connection.transaction(async () => {
-          const newOrder = Order.create({
+          const newOrder = await Order.create({
             user: user._id,
-            preOrders: preOrders,
+            pre_orders: preOrders,
             totalQty_breakdown: {
               preOrders_qty: processedCart.totalQty_breakdown.preOrders_qty,
               total_qty: processedCart.totalQty_breakdown.preOrders_qty
@@ -116,7 +117,7 @@ class CheckoutService {
               total: shippingFee + processedCart.total_breakdown.preOrders_total
             },
           });
-    
+
           return await this.checkoutOrder({ user: user, preparedOrder: newOrder, if_delivery: if_delivery }, res);
         });
       }
@@ -126,15 +127,15 @@ class CheckoutService {
         const total_qty = selectedContent.reduce((acc, item) => acc + item.qty, 0);
         const shippingFee = if_delivery ? shipping_service.get_fee() : 0;
         data = await Connection.transaction(async () => {
-          const newOrder = Order.create({
+          const newOrder = await Order.create({
             user: user._id,
             order_content: selectedContent,
             totalQty_breakdown: {
-              preOrders_qty: total_qty,
+              order_qty: total_qty,
               total_qty: total_qty
             },
             total_breakdown: {
-              orders_total: total,
+              order_total: total,
               shipping_fee: shippingFee,
               total: shippingFee + total
             },
@@ -149,7 +150,7 @@ class CheckoutService {
         const total_qty = selectedPrs.reduce((acc, pr) => acc + pr.total_qty, 0);
         const shippingFee = if_delivery ? shipping_service.get_fee() : 0;
         data = await Connection.transaction(async () => {
-          const newOrder = Order.create({
+          const newOrder = await Order.create({
             user: user._id,
             pre_orders: selectedPrs,
             totalQty_breakdown: {
@@ -157,7 +158,7 @@ class CheckoutService {
               total_qty: total_qty
             },
             total_breakdown: {
-              orders_total: total,
+              preOrders_total: total,
               shipping_fee: shippingFee,
               total: shippingFee + total
             },

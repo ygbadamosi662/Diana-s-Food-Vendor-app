@@ -38,6 +38,7 @@ class CartService {
       orderTotal = orderQty * food.price;
 
       normal_order_items.push({
+        id: order_items[0]._id,
         food_name: food.name * order_items[0].qty,
         price: food.price,
         qty: {
@@ -60,6 +61,7 @@ class CartService {
 
         
         normal_order_items.push({
+          id: ordered_item._id,
           food_name: food.name,
           price: food.price * ordered_item.qty,
           qty: {
@@ -95,6 +97,7 @@ class CartService {
             preOrders.push({
               id: pre_orders[0]._id,
               order_content: [{
+                id: order_content[0]._id,
                 food_name: food.name,
                 price: preOrder_total,
                 qty: {
@@ -131,6 +134,7 @@ class CartService {
               preOrder_total += (updatedQty * food.price);
 
               revampedItems.push({
+                id: ordered_item._id,
                 food_name: food.name,
                 price: food.price * updatedQty,
                 qty: {
@@ -189,6 +193,7 @@ class CartService {
               preOrders.push({
                 id: pre_order._id,
                 order_content: [{
+                  id: order_content[0]._id,
                   food_name: food.name,
                   price: preOrder_total,
                   qty: {
@@ -226,6 +231,7 @@ class CartService {
                 preOrder_total += (preOrder_qty * food.price);
 
                 revampedItems.push({
+                  id: ordered_item._id,
                   food_name: food.name,
                   qty: {
                     ordered: updatedQty,

@@ -150,7 +150,7 @@ const orderSchema = new Schema({
 }, { timestamps: true });
 
 orderSchema.pre('save', function(next) {
-  if ((this.order_content.length < 1) && (this.pre_orders.length < 1)) {
+  if ((this.order_content.length === 0) && (this.pre_orders.length === 0)) {
     return next(new Error('you cant order zero items'));
   }
   next();

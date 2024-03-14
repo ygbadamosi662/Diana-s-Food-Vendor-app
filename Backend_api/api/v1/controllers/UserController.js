@@ -1670,7 +1670,7 @@ class UserController {
           }),
         if_delivery: Joi
           .object({
-            if_old_addres: Joi
+            if_old_address: Joi
               .boolean()
               .required(),
             address_id: Joi
@@ -1706,7 +1706,7 @@ class UserController {
           })
           .custom((value, helpers) => {
             const { if_old_address, new_address, address_id} = value;
-            if(gossip()) {
+            if(gossip(req)) {
               if(value) {
                 if(if_old_address) {
                   if(address_id) {
