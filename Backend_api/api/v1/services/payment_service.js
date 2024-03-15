@@ -21,7 +21,7 @@ class PaymentService {
     });
   }
 
-  async initiate_payment(payload, res, pwt_off=true) {
+  async initiate_payment(payload, pwt_off=true) {
     const { user, email, amount } = payload;
     try {
       if(!pwt_off) {
@@ -45,53 +45,103 @@ class PaymentService {
       
        const { status: realStatus, data: realData } = data;
       if (status !== 200) {
-        return res
-          .status(500)
-          .json({
-            msg: 'Something went wrong, charge attempt failed, please try again',
-          });
+        return {
+          msg: 'Something went wrong, charge attempt failed, please try again',
+          data: null
+        }
       }
 
       if(!realStatus) {
-        return res
-          .status(400)
-          .json({
-            msg: data.message,
-          });
+        return {
+          msg: data.message,
+          data: null
+        }
       }
 
-      return realData;
+      return {
+        data: realData
+      };
     } catch (error) {
-      res
-        .status(500)
-        .json({
-          msg: 'Something went wrong, charge attempt failed, please try again',
-        })
-      console.log(error);
+      throw error;
+    }
+    
+  }
+
+  async finalizePayment(transaction) {
+    if(!transaction) {
+      return null;
+    }
+    try {
+      let { data_from_payment_service } = transaction;
+      const { reference } = data_from_payment_service;
+      const response = await this.appAx.get(`https://api.paystack.co/charge/${reference}`);
+      
+      const { data, status } = response;
+
+      const { status: realStatus, data: realData } = data;
+      if (status !== 200) {
+        return {
+          data: null,
+          msg: 'Something went wrong, charge verification failed, please try again'
+        };
+      }
+
+      if(!realStatus) {
+        return {
+          data: null,
+          msg: data.message
+        };
+      }
+
+      const { realDataStatus } = realData;
+      if(realData.status === 'failed') {
+        return {
+          data: null,
+          msg: realData.message
+        };
+      } else if(realData.status === 'pending') {
+        transaction.status = Transaction_Status.pending;
+        await transaction.save();
+        
+        return {
+          data: null,
+          msg: "Payment is still pending, please try again later"
+        };
+      } else if(realData.status === 'success') {
+        return {
+          data: realData
+        };
+      }
+    } catch (error) {
+      throw error;
     }
     
   }
 
   async createTransaction(dataFromService, payload) {
-    const { user, order, amount } = payload;
-    const bank = {
-      bank_name: dataFromService.bank.name,
-      account_name: dataFromService.account_name,
-      account_number: dataFromService.account_number,
-    };
+    try {
+      const { user, order, amount } = payload;
+      const bank = {
+        bank_name: dataFromService.bank.name,
+        account_name: dataFromService.account_name,
+        account_number: dataFromService.account_number,
+      };
 
-    const transaction = await Transaction.create({
-      user: user._id,
-      order: order._id,
-      amount,
-      credit_account: bank,
-      debit_account: null,
-      data_from_payment_service: dataFromService,
-      status: Transaction_Status.initiated,
-      type: Transaction_type.credit
-    });
-    
-    return transaction;
+      const transaction = await Transaction.create({
+        user: user._id,
+        order: order._id,
+        amount,
+        credit_account: bank,
+        debit_account: null,
+        data_from_payment_service: dataFromService,
+        status: Transaction_Status.initiated,
+        type: Transaction_type.credit
+      });
+
+      return transaction;
+    } catch (error) {
+      throw error;
+    }
   }
 
 }

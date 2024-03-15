@@ -37,6 +37,7 @@ userRoutes.post('/cart/add', UserController.add_to_cart);
 userRoutes.get('/cart', UserController.get_my_cart);
 userRoutes.post('/cart/remove', UserController.remove_from_cart);
 userRoutes.post('/cart/checkout', UserController.checkout);
+userRoutes.get('/order/checkout/finalize/:id', UserController.finalizeCheckout);
 
 
 

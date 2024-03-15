@@ -1359,7 +1359,6 @@ class UserController {
       if((added_flag === false) && order) {
         // if pre-order
         if(pre_order) {
-          console.log("im here")
           const { schedule_id, delivery_time } = pre_order;
           const schedule = food.schedules.id(new Types.ObjectId(schedule_id));
           const now = new Date();
@@ -1636,7 +1635,6 @@ class UserController {
     }
   }
 
-  // when payment have been implemented, come back here
   static async checkout(req, res) {
     try {
       const gossip = (req) => {
@@ -1774,6 +1772,64 @@ class UserController {
         .json({
           msg: `Payment initialized successfully`,
           data: data
+        });
+    } catch (error) {
+      
+      if (error instanceof MongooseError) {
+        console.log('We have a mongoose problem', error.message);
+        return res.status(500).json({msg: error.message});
+      }
+      if (error instanceof JsonWebTokenErro) {
+        console.log('We have a jwt problem', error.message);
+        return res.status(500).json({msg: error.message});
+      }
+      console.log(error);
+      return res.status(500).json({msg: error.message});
+    }
+  }
+
+  static async finalizeCheckout(req, res) {
+    try {
+      if(!req.params.id) {
+        return res
+          .status(400)
+          .json({ msg: 'Bad request, id is required'});
+      }
+
+      const order = await Order
+        .findById(new Types.ObjectId(req.params.id))
+        .populate('transaction user order_content.food pre_orders.order_content.food');
+
+      // check if order exists
+      if(!order) {
+        return res
+          .status(400)
+          .json({
+            msg: 'Invalid Request, You have no item in cart',
+          });
+      }
+
+      if(order.user._id.toString() !== req.user.id) {
+        return res
+          .status(400)
+          .json({
+            msg: 'Bad Request, invalid credentials',
+          });
+
+      }
+
+      const result = await checkout_service.finalizeCheckout(order, res);
+      if(!result.data) {
+        return res
+          .status(400)
+          .json({
+            msg: result.msg,
+          });
+      }
+      return res
+        .status(201)
+        .json({
+          ...result.data
         });
     } catch (error) {
       

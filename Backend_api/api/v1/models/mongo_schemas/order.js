@@ -26,6 +26,9 @@ orderItemSchema.pre('save', function(next) {
   if (this.qty < 1) {
     return next(new Error('you cant order zero item'));
   }
+  if (this.price < 0) {
+    return next(new Error('Price cannot be less than zero'));
+  }
   next();
 });
 
@@ -47,6 +50,13 @@ const TotalBreakdownSchema = new Schema({
     required: true,
   },
 }, { timestamps: false });
+
+TotalBreakdownSchema.pre('save', function(next) {
+  if ((this.total < 0) || (this.order_total < 0) || (this.preOrders_total < 0) || (this.shipping_fee < 0)) {
+    return next(new Error('Amount cannot be less than zero'));
+  }
+  next();
+});
 
 const TotalQtyBreakdownSchema = new Schema({
   order_qty: {
@@ -84,11 +94,6 @@ const pre_orderSchema = new Schema({
   type: {
     type: String,
     enum: Object.values(Order_type),
-    default: null,
-  },
-  shipment: {
-    type: Schema.Types.ObjectId,
-    ref: Collections.Shipment,
     default: null,
   },
   ready_time: {
